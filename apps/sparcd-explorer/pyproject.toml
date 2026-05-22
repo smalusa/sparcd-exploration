@@ -1,0 +1,20 @@
+[project]
+name = "sparcd-explorer"
+version = "0.0.1"
+description = "Marimo data exploration notebooks for SPARC'd"
+requires-python = ">=3.11"
+dependencies = [
+  "marimo>=0.9.0",
+  "pandas>=2.2.0",
+  "polars>=1.0.0",
+  "duckdb>=1.0.0",
+  "altair>=5.4.0",
+  "httpx>=0.27.0",
+  "minio>=7.2.0",
+  "python-dotenv>=1.0.0",
+  "ipyleaflet>=0.20.0",
+  "plotly>=6.7.0",
+]
+
+[tool.uv]
+package = false

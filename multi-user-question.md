@@ -25,26 +25,42 @@ So the multi-user mechanism has to work with **just a bucket**.
 
 ## Sketch of a fix (to discuss)
 
-Treat the bucket as an append-only event log. Each volunteer writes to their own prefix; everyone reads everyone's:
+Per-author, append-only, **signed** logs. Each volunteer writes only to their own area; everyone reads others' as permitted and merges locally. (Inspired by Secure Scuttlebutt; "git for observation records.")
 
 ```
-bucket/
-  media/<sha>.jpg                       (immutable, content-addressed)
-  events/<volunteerId>/<ts>-<uuid>.bin  (each volunteer's change batches)
-  snapshots/<watermark>.cdb             (periodic compaction)
+bucket/                                      ← S3 = a permanently-online replication peer (optional)
+  media/<sha>.jpg                            (immutable, content-addressed)
+  authors/<pubkey>/log/<seq>.changeset       (signed logical changesets)
+  authors/<pubkey>/log/<seq>.sig             (Ed25519 detached signature)
+  authors/<pubkey>/snapshot/<watermark>.db   (periodic compaction)
+  project/manifest/<seq>.json(+.sig)         (signed membership: allowed pubkeys)
 ```
 
-- Local SQLite stays the source of truth per device; CRDT change records (via [cr-sqlite](https://github.com/vlcn-io/cr-sqlite)) get pushed to `events/<me>/...` and pulled from everyone else's prefix.
-- No write collisions — different prefixes per volunteer.
-- Offline-first naturally: queue events locally, flush when reconnected.
-- Tier 0 still works (just no events to push).
-- A future Worker / Durable Object can later replace polling with WebSocket fanout *without changing the data model*.
+- Local SQLite stays the source of truth per device. Each write produces a **logical changeset** (SQLite `sqlite3session` extension, or [cr-sqlite](https://github.com/vlcn-io/cr-sqlite) for ready-made CRDT merge), signed with the author's key.
+- On pull: verify signature → check author is in the signed project manifest → apply.
+- No write collisions — different author prefixes. No server validates anything; trust is the manifest + signatures.
+- Offline-first naturally: queue signed changesets locally, flush when reconnected.
+- Tier 0 still works (no peer to push to).
+- P2P (WebRTC) and a future relay are *transport upgrades only* — same signed-log data model, so nothing migrates.
+
+## Why not Litestream / shipping the WAL
+
+Litestream is a Go server sidecar and ships *physical* WAL page frames — single-writer leader replication, no multi-author merge, and physical pages can't be per-author signed or merged. Don't port it. The right primitive is **logical** changesets (`sqlite3session` / cr-sqlite). For "I dropped my laptop" backup of one person's own DB, a periodic `VACUUM INTO` snapshot upload covers ~90% of the value.
+
+## Identity & signing with no server (the key question)
+
+- Ed25519 keypair generated **in the browser** (`SubtleCrypto`, native in current Chrome/Safari/Firefox). The **public key is the identity** — self-sovereign, exactly like an SSH key or a signed git commit. No server issues or validates it.
+- Private key stays in OPFS/IndexedDB, wrapped with a passphrase (PBKDF2 + AES-GCM). Never leaves the device.
+- "Auth" = a signed project manifest listing member pubkeys, bootstrapped by the project creator, extended by appending signed membership records. Bucket write-credential is the coarse gate; signatures are the fine gate.
+- Recovery: SLIP-39 (Shamir) recovery shares with trusted co-volunteers. Worst case, start a fresh collection.
 
 ## Things to figure out together
 
-1. Is cr-sqlite mature enough to bet on, or do we hand-roll a change-log table?
-2. Schema cost: CRDTs require UUID PKs, soft-deletes with tombstones, no `AUTOINCREMENT`. Already mostly planned, but worth confirming.
-3. Compaction policy — who triggers it, how often, what happens on races (`PUT-If-None-Match` should handle it).
-4. Credential sharing: project owner gives each volunteer a bucket-scoped key. Acceptable, or do we need a smarter story?
-5. Sync cadence and UX — polling every 15–30s is fine for tagging workflows; do we surface a "last synced" indicator?
-6. What about Tier 0 collaboration? Camtrap-DP export/import as the manual fallback?
+1. Does our `sqlite-wasm` build include `SQLITE_ENABLE_SESSION`? If not: cr-sqlite, or an app-level op-log.
+2. Schema cost: UUID PKs, soft-deletes with tombstones, no `AUTOINCREMENT`. Mostly already planned.
+3. Compaction policy — who triggers it, how often, races (`PUT-If-None-Match`).
+4. Credential sharing: project owner gives each volunteer a bucket-scoped, prefix-scoped key. Good enough?
+5. Sync cadence/UX — poll every 15–30s; surface a "last synced / N peers" indicator.
+6. Tier 0 collaboration: Camtrap-DP export/import as the manual fallback.
+7. phiresky's range-request SQLite: useful to *lazy-read a peer's snapshot without full download*, but it's read-only, unmaintained (2023), and on old `sql.js` — treat the **technique**, not the library, as the dependency.
+8. P2P transport: WebRTC needs signaling. Realistic v1 = S3-as-peer (zero P2P code); QR/bucket SDP rendezvous later. Don't let P2P block the build.
