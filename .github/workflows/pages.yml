@@ -1,0 +1,64 @@
+name: Deploy WASM notebook to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/sparcd-explorer/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/sparcd-explorer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - name: Sync Python deps
+        run: uv sync
+
+      - name: Generate WASM-flavored notebook (prepend PEP 723 deps)
+        run: |
+          set -euo pipefail
+          {
+            printf '# /// script\n# requires-python = ">=3.11"\n# dependencies = ["marimo","minio","python-dotenv","polars","plotly","h3"]\n# ///\n\n'
+            cat notebooks/hello.py
+          } > notebooks/hello_wasm.py
+
+      - name: Export static WASM bundle
+        run: |
+          uv run marimo export html-wasm notebooks/hello_wasm.py \
+            -o dist --mode run --force
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/sparcd-explorer/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
