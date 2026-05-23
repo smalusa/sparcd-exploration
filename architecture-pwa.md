@@ -1,4 +1,4 @@
-# SPARC'd — PWA-First Rewrite, Architecture Brief
+# SPARC'd — PWA-First Architecture Brief
 
 A parallel proposal to `architecture.md`. Same goal — drop the Python/Docker server, model Camtrap-DP natively, work offline — but achieved as a **pure progressive web app** with no install, served as a static site, persistent on the user's device via OPFS.
 

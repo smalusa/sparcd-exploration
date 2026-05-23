@@ -1,4 +1,4 @@
-# SPARC'd Rewrite — Problem Brief
+# SPARC'd — Problem Brief
 
 ## Background
 
@@ -17,7 +17,7 @@ Two existing implementations:
 4. Queries the dataset by species, location, elevation, date, hour, day-of-week, activity-grouping interval, collection.
 5. Exports results (CSV, image archives) for downstream population/behavior analysis.
 
-## Problems Driving the Rewrite
+## Problems With the Current Stack
 
 1. **Always-online assumption.** Tagging is hours-long fieldwork-adjacent work; losing the network shouldn't lose the session. Both existing implementations require live S3 connectivity.
 2. **Platform shell-outs.** The Python backend invokes `exiftool` and `ExifWriter.jar` as subprocesses to read/write image EXIF. Most fragile part of the system.
@@ -27,7 +27,7 @@ Two existing implementations:
 
 ## Goal
 
-A backend-less, TypeScript-based rewrite that:
+A backend-less, TypeScript-based approach that:
 
 - Drops the Python server and Docker entirely.
 - Works offline (local-first); S3 becomes optional, used only for image-blob mirroring/backup.

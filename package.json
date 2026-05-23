@@ -1,5 +1,5 @@
 {
-  "name": "sparcd-rewrite",
+  "name": "sparcd-exploration",
   "private": true,
   "packageManager": "pnpm@10.20.0",
   "scripts": {

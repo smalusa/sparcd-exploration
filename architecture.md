@@ -1,4 +1,4 @@
-# SPARC'd — Backend-less Rewrite, Architecture Brief
+# SPARC'd — Backend-less Architecture Brief
 
 A from-scratch redesign that drops the Python/Docker server, treats Camtrap-DP as the native data model, and ships as a TypeScript desktop app that works offline.
 
@@ -6,7 +6,7 @@ This doc locks the runtime, data, and storage decisions. A separate visual desig
 
 ---
 
-## 1. Why rewrite
+## 1. Why a new approach
 
 Today's `sparcd-web` is a Next.js frontend on top of a Flask backend that does the real work. The Java original (CulverLab/sparcd) is JavaFX talking directly to S3/CyVerse with app-specific JSON.
 
