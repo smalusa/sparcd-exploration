@@ -67,7 +67,7 @@ pnpm dev
 Pyodide bundle and publishes it via GitHub Pages on every push that touches
 `apps/sparcd-explorer/**`. Live at:
 
-<https://juli4ng.github.io/sparcd-exploration/>
+<https://smalusa.github.io/sparcd-exploration/>
 
 The deployed page runs Python entirely in the visitor's browser. SPARC'd
 credentials are entered in the form — there is no server-side secret. The
