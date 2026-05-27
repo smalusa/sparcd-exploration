@@ -3,9 +3,6 @@ name: Deploy WASM notebook to GitHub Pages
 on:
   push:
     branches: [main]
-    paths:
-      - "apps/sparcd-explorer/**"
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
