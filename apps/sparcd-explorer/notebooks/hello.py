@@ -17,7 +17,7 @@ def _():
     import marimo as mo
     from minio import Minio
 
-    # .env loading: only when python-dotenv is available (i.e. running locally —
+    # .env loading: only when python-dotenv is available (i.e. running locally â€”
     # Pyodide / WASM doesn\'t have it by default and has no filesystem to read).
     try:
         from dotenv import load_dotenv as _load_dotenv
@@ -182,16 +182,10 @@ def _(collection_picker):
 
 @app.cell(hide_code=True)
 def _(BUCKETS, collection_picker, mo):
-    _picked_labels = [k for k, v in (collection_picker.options or {}).items() if v in BUCKETS]
-    _label_str = ", ".join(_picked_labels) if _picked_labels else "(no collection selected)"
-    mo.md(
-        f"""
-        # SPARC'd \u2014 {_label_str}
-
-        Pick one or more collections, filter by date and common-name tags, and
-        click (or Shift-click) map markers to drill in.
-        """
+    intro_text = mo.md(
+        "Filter by range, site, time, and species, then click or Shift-click map markers to drill in."
     )
+    intro_text
     return
 
 
@@ -320,80 +314,182 @@ def _(mo, observations, pl):
 
 
 @app.cell(hide_code=True)
-def _(mo, observations):
-    # Common-name filters (include / exclude). Options built in Python (avoids
-    # a polars str.extract_all path that panics on the Pyodide build).
+def _(deployments, mo, observations):
+    # Query filters. Options are built in Python for Pyodide/WASM compatibility.
     import re as _re
 
     _pat = _re.compile(r"COMMONNAME:([^\]]+)")
-    _tag_counts = {}
+    _species_counts = {}
     for _t in observations["tags"].to_list():
         if not _t:
             continue
         for _m in _pat.findall(_t):
-            _tag_counts[_m] = _tag_counts.get(_m, 0) + 1
-    _options_list = sorted(_tag_counts, key=lambda k: -_tag_counts[k])
-    _default_excluded = [n for n in _options_list if any(k in n.lower() for k in ("ghost", "test"))]
+            _species_counts[_m] = _species_counts.get(_m, 0) + 1
+    for _name in observations["scientific_name"].to_list():
+        if _name and len(_name) >= 3:
+            _species_counts[_name] = _species_counts.get(_name, 0) + 1
+    _species_options = sorted(_species_counts, key=lambda k: (-_species_counts[k], k.lower()))
+    _default_excluded = [n for n in _species_options if any(k in n.lower() for k in ("ghost", "test"))]
+
+    _site_options = sorted(
+        {v for v in deployments["location_id"].to_list() if v and v != "0000"}
+    )
+    _range_options = sorted({v[:3] for v in _site_options if len(v) >= 3})
+    _year_options = sorted(
+        {str(v)[:4] for v in observations["timestamp"].to_list() if v and len(str(v)) >= 4}
+    )
+    _month_options = sorted(
+        {str(v)[5:7] for v in observations["timestamp"].to_list() if v and len(str(v)) >= 7}
+    )
+
+    mountain_range_filter = mo.ui.multiselect(
+        options=_range_options,
+        value=[],
+        label="Mountain range (first 3 letters of site code; empty = all)",
+        full_width=True,
+    )
+    site_code_filter = mo.ui.multiselect(
+        options=_site_options,
+        value=[],
+        label="Site code / location (empty = all)",
+        full_width=True,
+    )
+    year_filter = mo.ui.multiselect(
+        options=_year_options,
+        value=[],
+        label="Year (empty = all)",
+        full_width=True,
+    )
+    month_filter = mo.ui.multiselect(
+        options=_month_options,
+        value=[],
+        label="Month (empty = all)",
+        full_width=True,
+    )
 
     include_common = mo.ui.multiselect(
-        options=_options_list,
+        options=_species_options,
         value=[],
-        label="Include only (empty = all). Use this for \"only show X species\".",
+        label="Species (empty = all detected species)",
         full_width=True,
     )
     exclude_common = mo.ui.multiselect(
-        options=_options_list,
+        options=_species_options,
         value=_default_excluded,
-        label="Exclude (drop these tags).",
+        label="Exclude species/tags",
         full_width=True,
     )
-    mo.vstack([include_common, exclude_common])
-    return exclude_common, include_common
+    show_species_columns = mo.ui.checkbox(
+        value=True,
+        label="Show query result columns in the output table",
+    )
+    mo.vstack([
+        mo.md("**Query filters**"),
+        mountain_range_filter,
+        site_code_filter,
+        year_filter,
+        month_filter,
+        include_common,
+        exclude_common,
+        show_species_columns,
+    ])
+    return (
+        exclude_common,
+        include_common,
+        month_filter,
+        mountain_range_filter,
+        show_species_columns,
+        site_code_filter,
+        year_filter,
+    )
 
 
 @app.cell(hide_code=True)
-def _(date_range, exclude_common, include_common, media, observations, pl):
-    # Apply common-name include/exclude AND date-range filters (Pyodide-safe).
+def _(
+    date_range,
+    deployments,
+    exclude_common,
+    include_common,
+    media,
+    month_filter,
+    mountain_range_filter,
+    observations,
+    pl,
+    site_code_filter,
+    year_filter,
+):
+    # Apply query filters (Pyodide-safe).
     import re as _re_filt
 
     _included = set(include_common.value or [])
     _excluded = set(exclude_common.value or [])
+    _ranges = set(mountain_range_filter.value or [])
+    _sites = set(site_code_filter.value or [])
+    _years = set(year_filter.value or [])
+    _months = set(month_filter.value or [])
     _d_start, _d_end = date_range.value
     _d_start_s, _d_end_s = str(_d_start), str(_d_end)
 
-    _obs_dated = observations.filter(
+    _deployments_scope = deployments
+    if _ranges:
+        _deployments_scope = _deployments_scope.filter(
+            pl.col("location_id").str.slice(0, 3).is_in(list(_ranges))
+        )
+    if _sites:
+        _deployments_scope = _deployments_scope.filter(pl.col("location_id").is_in(list(_sites)))
+    _deployment_ids = _deployments_scope["deployment_id"].unique().to_list()
+
+    _obs_scope = observations.filter(pl.col("deployment_id").is_in(_deployment_ids))
+    _media_scope = media.filter(pl.col("deployment_id").is_in(_deployment_ids))
+
+    _obs_dated = _obs_scope.filter(
         (pl.col("timestamp").str.len_chars() < 10)
         | ((pl.col("timestamp").str.slice(0, 10) >= _d_start_s)
            & (pl.col("timestamp").str.slice(0, 10) <= _d_end_s))
     )
+    if _years:
+        _obs_dated = _obs_dated.filter(pl.col("timestamp").str.slice(0, 4).is_in(list(_years)))
+    if _months:
+        _obs_dated = _obs_dated.filter(pl.col("timestamp").str.slice(5, 2).is_in(list(_months)))
 
     if not _included and not _excluded:
         observations_filtered = _obs_dated
     else:
         _pat = _re_filt.compile(r"COMMONNAME:([^\]]+)")
-        def _keep_row(t):
+
+        def _keep_row(t, scientific_name):
             names = set(_pat.findall(t)) if t else set()
+            if scientific_name and len(scientific_name) >= 3:
+                names.add(scientific_name)
             if _included and not (names & _included):
                 return False
             if _excluded and names and names.issubset(_excluded):
                 return False
             return True
 
-        _mask = [_keep_row(t) for t in _obs_dated["tags"].to_list()]
+        _mask = [
+            _keep_row(t, s)
+            for t, s in zip(_obs_dated["tags"].to_list(), _obs_dated["scientific_name"].to_list())
+        ]
         observations_filtered = _obs_dated.filter(pl.Series("_keep", _mask))
 
     _kept_paths = observations_filtered["media_path"].unique().to_list()
-    _dated_obs_paths = _obs_dated["media_path"].unique().to_list()
-    media_filtered = media.filter(
-        pl.col("media_path").is_in(_kept_paths)
-        | ~pl.col("media_path").is_in(_dated_obs_paths)
-    )
+    media_filtered = _media_scope.filter(pl.col("media_path").is_in(_kept_paths))
+    query_deployment_ids = observations_filtered["deployment_id"].unique().to_list()
     None
-    return media_filtered, observations_filtered
+    return media_filtered, observations_filtered, query_deployment_ids
 
 
 @app.cell(hide_code=True)
-def _(deployments, media_filtered, mo, observations_filtered, pl):
+def _(
+    deployments,
+    media_filtered,
+    mo,
+    observations_filtered,
+    pl,
+    query_deployment_ids,
+    show_species_columns,
+):
     # Normalize deployments; attach image counts using the FILTERED media/observations.
     _locations_raw = (
         deployments
@@ -409,14 +505,16 @@ def _(deployments, media_filtered, mo, observations_filtered, pl):
         )
         .drop("latitude", "longitude")
         .rename({"lat_fixed": "latitude", "lng_fixed": "longitude"})
+        .filter(pl.col("deployment_id").is_in(query_deployment_ids))
         .filter(pl.col("location_id") != "0000")
         .filter(pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null())
+        .with_columns(pl.col("location_id").str.slice(0, 3).alias("mountain_range"))
     )
 
     _image_counts = media_filtered.group_by("deployment_id").agg(
         pl.col("media_path").n_unique().alias("image_count")
     )
-    _obs_counts = observations_filtered.group_by("deployment_id").agg(
+    _obs_counts = media_filtered.group_by("deployment_id").agg(
         pl.col("media_path").n_unique().alias("tagged_image_count")
     )
 
@@ -424,7 +522,7 @@ def _(deployments, media_filtered, mo, observations_filtered, pl):
         _locations_raw
         .join(_image_counts, on="deployment_id", how="left")
         .join(_obs_counts, on="deployment_id", how="left")
-        .group_by("location_id", "location_name", "latitude", "longitude")
+        .group_by("mountain_range", "location_id", "location_name", "latitude", "longitude")
         .agg(
             pl.col("deployment_id").unique().alias("deployment_ids"),
             pl.col("image_count").sum().fill_null(0).alias("image_count"),
@@ -433,8 +531,60 @@ def _(deployments, media_filtered, mo, observations_filtered, pl):
         .sort("location_name")
     )
 
+    _locations_table = locations.drop("deployment_ids")
+    if show_species_columns.value:
+        _dep_to_loc = dict(_locations_raw.select("deployment_id", "location_id").iter_rows())
+        _pat_result = __import__("re").compile(r"COMMONNAME:([^\]]+)")
+        _species_by_loc = {}
+        _years_by_loc = {}
+        _months_by_loc = {}
+        for _obs in observations_filtered.select("deployment_id", "timestamp", "scientific_name", "tags").iter_rows(named=True):
+            _name = _obs["scientific_name"] or ""
+            _loc_id = _dep_to_loc.get(_obs["deployment_id"])
+            if not _loc_id:
+                continue
+            _names = [_name] if len(_name) >= 3 else _pat_result.findall(_obs["tags"] or "")
+            for _n in _names:
+                if _n:
+                    _species_by_loc.setdefault(_loc_id, set()).add(_n)
+            _ts = _obs["timestamp"] or ""
+            if len(_ts) >= 4:
+                _years_by_loc.setdefault(_loc_id, set()).add(_ts[:4])
+            if len(_ts) >= 7:
+                _months_by_loc.setdefault(_loc_id, set()).add(_ts[5:7])
+        _summary_ids = set(_species_by_loc) | set(_years_by_loc) | set(_months_by_loc)
+        _species_summary = pl.DataFrame(
+            [
+                {
+                    "location_id": _loc_id,
+                    "years": ", ".join(sorted(_years_by_loc.get(_loc_id, set()))),
+                    "months": ", ".join(sorted(_months_by_loc.get(_loc_id, set()))),
+                    "species": ", ".join(sorted(_species_by_loc.get(_loc_id, set()))),
+                    "species_count": len(_species_by_loc.get(_loc_id, set())),
+                }
+                for _loc_id in _summary_ids
+            ],
+            schema={
+                "location_id": pl.Utf8,
+                "years": pl.Utf8,
+                "months": pl.Utf8,
+                "species": pl.Utf8,
+                "species_count": pl.Int64,
+            },
+        )
+        _locations_table = (
+            _locations_table
+            .join(_species_summary, on="location_id", how="left")
+            .with_columns(
+                pl.col("years").fill_null(""),
+                pl.col("months").fill_null(""),
+                pl.col("species").fill_null(""),
+                pl.col("species_count").fill_null(0),
+            )
+        )
+
     mo.ui.table(
-        locations.drop("deployment_ids"),
+        _locations_table,
         show_column_summaries=False,
         show_data_types=False,
         selection=None,
@@ -614,16 +764,17 @@ def _(hex_geojson, hex_summary, mo):
 @app.cell(hide_code=True)
 def _(locations, mo, pl, selected_location_ids):
     if not selected_location_ids:
-        mo.md("### \u2191 Click, Shift-click, or box-select markers to load the report")
+        selection_summary = mo.md("### \u2191 Click, Shift-click, or box-select markers to load the report")
     else:
         _rows = locations.filter(pl.col("location_id").is_in(selected_location_ids))
         _names = ", ".join(_rows["location_name"].to_list())
         _img = int(_rows["image_count"].sum())
         _tag = int(_rows["tagged_image_count"].sum())
-        mo.md(
+        selection_summary = mo.md(
             f"### {len(selected_location_ids)} location(s): {_names}  \n"
             f"{_img} image(s) \u00b7 {_tag} tagged (after filters)"
         )
+    selection_summary
     return
 
 
@@ -685,7 +836,6 @@ def _(
     else:
         _rows = locations.filter(pl.col("location_id").is_in(selected_location_ids))
         _dep_ids = [d for ds in _rows["deployment_ids"].to_list() for d in ds]
-
         _media_loc = media_filtered.filter(pl.col("deployment_id").is_in(_dep_ids)).unique("media_path")
         _obs_loc = observations_filtered.filter(pl.col("deployment_id").is_in(_dep_ids))
 
@@ -771,19 +921,77 @@ def _(
     else:
         _rows = locations.filter(pl.col("location_id").is_in(selected_location_ids))
         _dep_ids = [d for ds in _rows["deployment_ids"].to_list() for d in ds]
-        selected_images_all = (
+        _dep_locations = pl.DataFrame([
+            {
+                "deployment_id": d,
+                "mountain_range": r["mountain_range"],
+                "location_id": r["location_id"],
+                "location_name": r["location_name"],
+            }
+            for r in _rows.iter_rows(named=True)
+            for d in r["deployment_ids"]
+        ])
+        _selected_media = (
             media_filtered
             .filter(pl.col("deployment_id").is_in(_dep_ids))
             .select("media_path", "file_name", "deployment_id", "bucket")
-            .unique(subset=["media_path"])
-            .join(
-                observations_filtered
-                .select("media_path", "scientific_name", "count", "tags", "timestamp")
-                .unique(subset=["media_path"]),
-                on="media_path",
-                how="inner",  # was "left" — drops untagged frames from the display
+            .unique(subset=["bucket", "media_path"])
+            .join(_dep_locations, on="deployment_id", how="left")
+        )
+        _selected_keys = set(_selected_media.select("bucket", "media_path").iter_rows())
+        import re as _re_events
+        _common_pat = _re_events.compile(r"COMMONNAME:([^\]]+)")
+        _events_by_key = {}
+        for _obs in observations_filtered.iter_rows(named=True):
+            _key = (_obs["bucket"], _obs["media_path"])
+            if _key not in _selected_keys:
+                continue
+            _name = _obs["scientific_name"] or ""
+            _tags = _obs["tags"] or ""
+            _names = [_name] if len(_name) >= 3 else _common_pat.findall(_tags)
+            _event = _events_by_key.setdefault(
+                _key,
+                {"bucket": _key[0], "media_path": _key[1], "species": set(), "count": 0, "tags": "", "timestamp": ""},
             )
-            .sort("media_path")
+            _event["species"].update(n for n in _names if n)
+            try:
+                _event["count"] += int(_obs["count"] or 0)
+            except ValueError:
+                pass
+            if not _event["tags"] and _tags:
+                _event["tags"] = _tags
+            _ts = _obs["timestamp"] or ""
+            if _ts and (not _event["timestamp"] or _ts < _event["timestamp"]):
+                _event["timestamp"] = _ts
+        _obs_events = pl.DataFrame(
+            [
+                {
+                    "bucket": _event["bucket"],
+                    "media_path": _event["media_path"],
+                    "scientific_name": ", ".join(sorted(_event["species"])),
+                    "count": _event["count"],
+                    "tags": _event["tags"],
+                    "timestamp": _event["timestamp"],
+                }
+                for _event in _events_by_key.values()
+            ],
+            schema={
+                "bucket": pl.Utf8,
+                "media_path": pl.Utf8,
+                "scientific_name": pl.Utf8,
+                "count": pl.Int64,
+                "tags": pl.Utf8,
+                "timestamp": pl.Utf8,
+            },
+        )
+        selected_images_all = (
+            _selected_media
+            .join(
+                _obs_events,
+                on=["bucket", "media_path"],
+                how="inner",
+            )
+            .sort("timestamp", descending=False)
         )
         selected_total = selected_images_all.height
     None
@@ -861,6 +1069,95 @@ def _(
         thumbnail_grid = mo.vstack([_status, mo.Html(_grid)])
 
     thumbnail_grid
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, selected_images_all, selected_location_ids):
+    show_image_event_table = mo.ui.checkbox(
+        value=True,
+        label="Show each selected image file as a table row",
+    )
+    _species_options = []
+    if selected_location_ids and selected_images_all.height > 0:
+        _seen = set()
+        for _value in selected_images_all["scientific_name"].to_list():
+            for _name in [p.strip() for p in (_value or "").split(",") if p.strip()]:
+                if _name not in _seen:
+                    _seen.add(_name)
+                    _species_options.append(_name)
+    detection_species_filter = mo.ui.multiselect(
+        options=sorted(_species_options),
+        value=[],
+        label="Detection table species filter (empty = all detected species)",
+        full_width=True,
+    )
+    if selected_location_ids and show_image_event_table.value:
+        detection_table_controls = mo.vstack([
+            mo.md("**Detection table filters**"),
+            show_image_event_table,
+            detection_species_filter,
+        ])
+    elif selected_location_ids:
+        detection_table_controls = show_image_event_table
+    else:
+        detection_table_controls = mo.md("")
+    detection_table_controls
+    return detection_species_filter, show_image_event_table
+
+
+@app.cell(hide_code=True)
+def _(
+    detection_species_filter,
+    mo,
+    pl,
+    selected_images_all,
+    selected_location_ids,
+    selected_total,
+    show_image_event_table,
+):
+    if not selected_location_ids or not show_image_event_table.value:
+        image_event_table = mo.md("")
+    elif selected_total == 0:
+        image_event_table = mo.md("**No tagged image events match the current filters** at the selected location(s).")
+    else:
+        _selected_species = set(detection_species_filter.value or [])
+        _filtered_images = selected_images_all
+        if _selected_species:
+            _mask = [
+                bool({p.strip() for p in (value or "").split(",") if p.strip()} & _selected_species)
+                for value in selected_images_all["scientific_name"].to_list()
+            ]
+            _filtered_images = selected_images_all.filter(pl.Series("_species_keep", _mask))
+        _event_rows = (
+            _filtered_images
+            .select(
+                "timestamp",
+                "mountain_range",
+                "location_id",
+                "location_name",
+                "file_name",
+                "scientific_name",
+                "count",
+                "media_path",
+                "deployment_id",
+            )
+            .rename({
+                "scientific_name": "species",
+                "count": "animal_count",
+            })
+        )
+        if _event_rows.height == 0:
+            image_event_table = mo.md("**No image events match the selected species filter.**")
+        else:
+            image_event_table = mo.ui.table(
+                _event_rows,
+                show_column_summaries=False,
+                show_data_types=False,
+                selection=None,
+                pagination=True,
+            )
+    image_event_table
     return
 
 
