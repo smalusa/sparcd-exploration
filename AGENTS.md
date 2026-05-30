@@ -1,4 +1,4 @@
-# sparcd-exploration — context for Claude Code
+# sparcd-exploration — context for Codex
 
 ## What this project is
 
@@ -31,7 +31,7 @@ relates to in other systems.
   `winget`. If a running shell cannot see a newly installed command yet,
   restart the shell so it picks up the updated user `Path`.
 - **marimo** for notebook-style exploration apps; pair with the
-  [`marimo-pair`](https://github.com/marimo-team/marimo-pair) Claude Code
+  [`marimo-pair`](https://github.com/marimo-team/marimo-pair) Codex
   plugin for live-kernel collaboration. Notebooks open with
   `--watch --no-token` so the plugin auto-discovers.
 
