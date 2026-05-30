@@ -48,6 +48,8 @@ def _():
 @app.cell(hide_code=True)
 def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
     # S3 / MinIO credentials. Edit and click Submit. Values prefill from .env if present.
+    from pathlib import Path as _Path
+
     _endpoint_in = mo.ui.text(
         value=DEFAULT_ENDPOINT,
         label="Endpoint",
@@ -80,7 +82,25 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
         .batch(endpoint=_endpoint_in, access=_access_in, secret=_secret_in, secure=_secure_in)
         .form(label="Credentials", bordered=True, show_clear_button=True)
     )
-    creds_form
+    _logo_path = _Path("assets/sparcd-favicon.ico")
+    _logo = mo.image(
+        src=str(_logo_path),
+        alt="SPARC'd logo",
+        width=120,
+    ) if _logo_path.exists() else mo.md("")
+    _project_header = mo.hstack(
+        [
+            mo.Html(
+                "<div style='font-size:34px; line-height:1.12; font-weight:800;'>"
+                "University of Arizona Wild Cat Research & Conservation Center"
+                "</div>"
+            ),
+            _logo,
+        ],
+        widths=[4, 1],
+        align="center",
+    )
+    mo.vstack([_project_header, creds_form])
     return (creds_form,)
 
 
@@ -149,7 +169,7 @@ def _(client, mo):
             continue
 
     collections_registry.sort(key=lambda r: (r["name"].strip().lower(), r["bucket"]))
-    mo.md(f"_Discovered {len(collections_registry)} collection(s)._")
+    None
     return (collections_registry,)
 
 
@@ -167,10 +187,10 @@ def _(collections_registry, mo):
     collection_picker = mo.ui.multiselect(
         options=_options,
         value=[_default] if _default else [],
-        label="Collections (search and pick one or more)",
-        full_width=True,
+        label="Collection",
+        full_width=False,
     )
-    collection_picker
+    None
     return (collection_picker,)
 
 
@@ -186,7 +206,7 @@ def _(collection_picker):
 
 
 @app.cell(hide_code=True)
-def _(BUCKETS, collection_picker, mo):
+def _(BUCKETS, mo):
     intro_text = mo.md(
         "Filter by range, site, time, and species, then click or Shift-click map markers to drill in."
     )
@@ -208,7 +228,8 @@ def _(BUCKETS, UPLOADS_PREFIXES, client, mo):
 
 
     DEPLOY_COLS = ["deployment_id", "location_id", "location_name",
-                   "longitude", "latitude"]
+                   "longitude", "latitude", "_d5", "_d6", "_d7",
+                   "_d8", "_d9", "_d10", "_d11", "elevation"]
     MEDIA_COLS = ["media_path", "deployment_id", "_p2", "_p3", "_p4",
                   "_p5", "file_name", "mime_type"]
     OBS_COLS = ["_p0", "deployment_id", "_p2", "media_path", "timestamp",
@@ -265,11 +286,12 @@ def _(BUCKETS, UPLOADS_PREFIXES, client, mo):
                 pass
 
     deployments = (
-        _to_df(_dep_rows, _dep_buckets, DEPLOY_COLS + [f"_d{i}" for i in range(50)])
+        _to_df(_dep_rows, _dep_buckets, DEPLOY_COLS + [f"_d{i}" for i in range(13, 50)])
         .select(DEPLOY_COLS + ["bucket"])
         .with_columns(
             pl.col("latitude").cast(pl.Float64, strict=False),
             pl.col("longitude").cast(pl.Float64, strict=False),
+            pl.col("elevation").cast(pl.Float64, strict=False),
         )
         .filter(pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null())
     )
@@ -294,7 +316,7 @@ def _(BUCKETS, UPLOADS_PREFIXES, client, mo):
 
 @app.cell(hide_code=True)
 def _(mo, observations, pl):
-    # Date range filter (applied to observation timestamps).
+    # Date filters are displayed with the rest of the query controls.
     import datetime as _dt
 
     _ts = observations.filter(pl.col("timestamp").str.len_chars() >= 10)["timestamp"]
@@ -307,19 +329,26 @@ def _(mo, observations, pl):
         _min_d = _dt.date(2010, 1, 1)
         _max_d = _dt.date(2030, 12, 31)
 
-    date_range = mo.ui.date_range(
+    start_date_filter = mo.ui.date(
         start=_min_d,
         stop=_max_d,
-        value=(_min_d, _max_d),
-        label=f"Date range (data spans {_min_d} \u2192 {_max_d})",
-        full_width=True,
+        value=_min_d,
+        label="Start date",
+        full_width=False,
     )
-    date_range
-    return (date_range,)
+    end_date_filter = mo.ui.date(
+        start=_min_d,
+        stop=_max_d,
+        value=_max_d,
+        label="End date",
+        full_width=False,
+    )
+    None
+    return end_date_filter, start_date_filter
 
 
 @app.cell(hide_code=True)
-def _(deployments, mo, observations):
+def _(collection_picker, deployments, end_date_filter, mo, observations, pl, start_date_filter):
     # Query filters. Options are built in Python for Pyodide/WASM compatibility.
     import re as _re
 
@@ -330,9 +359,6 @@ def _(deployments, mo, observations):
             continue
         for _m in _pat.findall(_t):
             _species_counts[_m] = _species_counts.get(_m, 0) + 1
-    for _name in observations["scientific_name"].to_list():
-        if _name and len(_name) >= 3:
-            _species_counts[_name] = _species_counts.get(_name, 0) + 1
     _species_options = sorted(_species_counts, key=lambda k: (-_species_counts[k], k.lower()))
     _default_excluded = [n for n in _species_options if any(k in n.lower() for k in ("ghost", "test"))]
 
@@ -346,59 +372,121 @@ def _(deployments, mo, observations):
     _month_options = sorted(
         {str(v)[5:7] for v in observations["timestamp"].to_list() if v and len(str(v)) >= 7}
     )
+    _elev = deployments.filter(pl.col("elevation").is_not_null())["elevation"]
+    if _elev.len() > 0:
+        _e_min = int(_elev.min())
+        _e_max = int(_elev.max())
+    else:
+        _e_min = 0
+        _e_max = 0
 
     mountain_range_filter = mo.ui.multiselect(
         options=_range_options,
         value=[],
-        label="Mountain range (first 3 letters of site code; empty = all)",
-        full_width=True,
+        label="Mountain range",
+        full_width=False,
     )
     site_code_filter = mo.ui.multiselect(
         options=_site_options,
         value=[],
-        label="Site code / location (empty = all)",
-        full_width=True,
+        label="Site code / location",
+        full_width=False,
     )
     year_filter = mo.ui.multiselect(
         options=_year_options,
         value=[],
-        label="Year (empty = all)",
-        full_width=True,
+        label="Year",
+        full_width=False,
     )
     month_filter = mo.ui.multiselect(
         options=_month_options,
         value=[],
-        label="Month (empty = all)",
-        full_width=True,
+        label="Month",
+        full_width=False,
     )
 
     include_common = mo.ui.multiselect(
         options=_species_options,
         value=[],
-        label="Species (empty = all detected species)",
-        full_width=True,
+        label="Species",
+        full_width=False,
     )
     exclude_common = mo.ui.multiselect(
         options=_species_options,
         value=_default_excluded,
         label="Exclude species/tags",
-        full_width=True,
+        full_width=False,
+    )
+    elevation_range_filter = mo.ui.range_slider(
+        start=_e_min,
+        stop=max(_e_min + 1, _e_max),
+        step=1,
+        value=[_e_min, _e_max],
+        label="Elevation",
+        show_value=True,
+        full_width=False,
+        disabled=_elev.len() == 0,
     )
     show_species_columns = mo.ui.checkbox(
         value=True,
-        label="Show query result columns in the output table",
+        label="Species columns",
+    )
+    coordinate_format = mo.ui.dropdown(
+        options={
+            "Lat/long": "latlong",
+            "UTM": "utm",
+        },
+        value="Lat/long",
+        label="Coordinate display",
+        full_width=False,
+    )
+    coordinate_method = mo.ui.dropdown(
+        options={
+            "Round coordinates": "round",
+            "Truncate coordinates": "truncate",
+        },
+        value="Round coordinates",
+        label="Coordinate security",
+        full_width=False,
+    )
+    coordinate_digits = mo.ui.dropdown(
+        options={
+            "Exact": None,
+            "0 decimals": 0,
+            "1 decimal": 1,
+            "2 decimals": 2,
+            "3 decimals": 3,
+            "4 decimals": 4,
+            "5 decimals": 5,
+        },
+        value="3 decimals",
+        label="Displayed coordinate digits",
+        full_width=False,
+    )
+    elevation_unit = mo.ui.dropdown(
+        options={
+            "Meters": "meters",
+            "Feet": "feet",
+        },
+        value="Meters",
+        label="Elevation display",
+        full_width=False,
     )
     mo.vstack([
         mo.md("**Query filters**"),
-        mountain_range_filter,
-        site_code_filter,
-        year_filter,
-        month_filter,
-        include_common,
-        exclude_common,
-        show_species_columns,
+        mo.hstack([collection_picker, mountain_range_filter, site_code_filter], widths="equal"),
+        mo.hstack([start_date_filter, end_date_filter, year_filter], widths="equal"),
+        mo.hstack([month_filter, include_common, elevation_range_filter], widths="equal"),
+        mo.hstack([exclude_common, show_species_columns], widths=[2, 1]),
+        mo.hstack([coordinate_format, coordinate_method, coordinate_digits], widths="equal"),
+        mo.hstack([elevation_unit], widths=[1]),
     ])
     return (
+        coordinate_digits,
+        coordinate_format,
+        coordinate_method,
+        elevation_unit,
+        elevation_range_filter,
         exclude_common,
         include_common,
         month_filter,
@@ -411,8 +499,9 @@ def _(deployments, mo, observations):
 
 @app.cell(hide_code=True)
 def _(
-    date_range,
     deployments,
+    elevation_range_filter,
+    end_date_filter,
     exclude_common,
     include_common,
     media,
@@ -421,6 +510,7 @@ def _(
     observations,
     pl,
     site_code_filter,
+    start_date_filter,
     year_filter,
 ):
     # Apply query filters (Pyodide-safe).
@@ -432,8 +522,11 @@ def _(
     _sites = set(site_code_filter.value or [])
     _years = set(year_filter.value or [])
     _months = set(month_filter.value or [])
-    _d_start, _d_end = date_range.value
+    _d_start, _d_end = start_date_filter.value, end_date_filter.value
+    if _d_start > _d_end:
+        _d_start, _d_end = _d_end, _d_start
     _d_start_s, _d_end_s = str(_d_start), str(_d_end)
+    _elev_min, _elev_max = elevation_range_filter.value
 
     _deployments_scope = deployments
     if _ranges:
@@ -442,6 +535,10 @@ def _(
         )
     if _sites:
         _deployments_scope = _deployments_scope.filter(pl.col("location_id").is_in(list(_sites)))
+    _deployments_scope = _deployments_scope.filter(
+        pl.col("elevation").is_null()
+        | ((pl.col("elevation") >= _elev_min) & (pl.col("elevation") <= _elev_max))
+    )
     _deployment_ids = _deployments_scope["deployment_id"].unique().to_list()
 
     _obs_scope = observations.filter(pl.col("deployment_id").is_in(_deployment_ids))
@@ -462,20 +559,15 @@ def _(
     else:
         _pat = _re_filt.compile(r"COMMONNAME:([^\]]+)")
 
-        def _keep_row(t, scientific_name):
+        def _keep_row(t):
             names = set(_pat.findall(t)) if t else set()
-            if scientific_name and len(scientific_name) >= 3:
-                names.add(scientific_name)
             if _included and not (names & _included):
                 return False
             if _excluded and names and names.issubset(_excluded):
                 return False
             return True
 
-        _mask = [
-            _keep_row(t, s)
-            for t, s in zip(_obs_dated["tags"].to_list(), _obs_dated["scientific_name"].to_list())
-        ]
+        _mask = [_keep_row(t) for t in _obs_dated["tags"].to_list()]
         observations_filtered = _obs_dated.filter(pl.Series("_keep", _mask))
 
     _kept_paths = observations_filtered["media_path"].unique().to_list()
@@ -486,7 +578,19 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(deployments, media_filtered, mo, observations_filtered, pl, query_deployment_ids, show_species_columns):
+def _(
+    coordinate_digits,
+    coordinate_format,
+    coordinate_method,
+    deployments,
+    elevation_unit,
+    media_filtered,
+    mo,
+    observations_filtered,
+    pl,
+    query_deployment_ids,
+    show_species_columns,
+):
     # Normalize deployments; attach image counts using the FILTERED media/observations.
     _locations_raw = (
         deployments
@@ -522,6 +626,7 @@ def _(deployments, media_filtered, mo, observations_filtered, pl, query_deployme
         .group_by("mountain_range", "location_id", "location_name", "latitude", "longitude")
         .agg(
             pl.col("deployment_id").unique().alias("deployment_ids"),
+            pl.col("elevation").mean().round(0).alias("elevation"),
             pl.col("image_count").sum().fill_null(0).alias("image_count"),
             pl.col("tagged_image_count").sum().fill_null(0).alias("tagged_image_count"),
         )
@@ -529,6 +634,76 @@ def _(deployments, media_filtered, mo, observations_filtered, pl, query_deployme
     )
 
     _locations_table = locations.drop("deployment_ids")
+    if elevation_unit.value == "feet":
+        _locations_table = _locations_table.with_columns(
+            (pl.col("elevation") * 3.28084).round(0).alias("elevation_ft")
+        ).drop("elevation")
+    else:
+        _locations_table = _locations_table.rename({"elevation": "elevation_m"})
+
+    if coordinate_format.value == "utm":
+        import math as _math
+
+        def _latlon_to_utm(lat, lon):
+            _zone = int((lon + 180) / 6) + 1
+            _hemisphere = "N" if lat >= 0 else "S"
+            _a = 6378137.0
+            _ecc_sq = 0.00669438
+            _k0 = 0.9996
+            _lat_rad = _math.radians(lat)
+            _lon_rad = _math.radians(lon)
+            _lon_origin = (_zone - 1) * 6 - 180 + 3
+            _lon_origin_rad = _math.radians(_lon_origin)
+            _ecc_prime_sq = _ecc_sq / (1 - _ecc_sq)
+            _n = _a / _math.sqrt(1 - _ecc_sq * _math.sin(_lat_rad) ** 2)
+            _t = _math.tan(_lat_rad) ** 2
+            _c = _ecc_prime_sq * _math.cos(_lat_rad) ** 2
+            _aa = _math.cos(_lat_rad) * (_lon_rad - _lon_origin_rad)
+            _m = _a * (
+                (1 - _ecc_sq / 4 - 3 * _ecc_sq ** 2 / 64 - 5 * _ecc_sq ** 3 / 256) * _lat_rad
+                - (3 * _ecc_sq / 8 + 3 * _ecc_sq ** 2 / 32 + 45 * _ecc_sq ** 3 / 1024) * _math.sin(2 * _lat_rad)
+                + (15 * _ecc_sq ** 2 / 256 + 45 * _ecc_sq ** 3 / 1024) * _math.sin(4 * _lat_rad)
+                - (35 * _ecc_sq ** 3 / 3072) * _math.sin(6 * _lat_rad)
+            )
+            _easting = _k0 * _n * (
+                _aa + (1 - _t + _c) * _aa ** 3 / 6
+                + (5 - 18 * _t + _t ** 2 + 72 * _c - 58 * _ecc_prime_sq) * _aa ** 5 / 120
+            ) + 500000
+            _northing = _k0 * (
+                _m + _n * _math.tan(_lat_rad) * (
+                    _aa ** 2 / 2
+                    + (5 - _t + 9 * _c + 4 * _c ** 2) * _aa ** 4 / 24
+                    + (61 - 58 * _t + _t ** 2 + 600 * _c - 330 * _ecc_prime_sq) * _aa ** 6 / 720
+                )
+            )
+            if lat < 0:
+                _northing += 10000000
+            return {"utm_zone": f"{_zone}{_hemisphere}", "utm_easting": _easting, "utm_northing": _northing}
+
+        _utm_df = pl.DataFrame(
+            [_latlon_to_utm(lat, lon) for lat, lon in _locations_table.select("latitude", "longitude").iter_rows()],
+            schema={"utm_zone": pl.Utf8, "utm_easting": pl.Float64, "utm_northing": pl.Float64},
+        )
+        _locations_table = pl.concat([_locations_table.drop("latitude", "longitude"), _utm_df], how="horizontal")
+
+    _coord_digits = coordinate_digits.value
+    if _coord_digits is not None:
+        _coord_cols = ["utm_easting", "utm_northing"] if coordinate_format.value == "utm" else ["latitude", "longitude"]
+        if coordinate_method.value == "truncate":
+            _scale = 10 ** _coord_digits
+
+            def _truncate_coord(v):
+                return int(v * _scale) / _scale
+
+            _locations_table = _locations_table.with_columns(
+                pl.col(_coord_cols[0]).map_elements(_truncate_coord, return_dtype=pl.Float64),
+                pl.col(_coord_cols[1]).map_elements(_truncate_coord, return_dtype=pl.Float64),
+            )
+        else:
+            _locations_table = _locations_table.with_columns(
+                pl.col(_coord_cols[0]).round(_coord_digits),
+                pl.col(_coord_cols[1]).round(_coord_digits),
+            )
     if show_species_columns.value:
         _dep_to_loc = dict(_locations_raw.select("deployment_id", "location_id").iter_rows())
         _pat_result = __import__("re").compile(r"COMMONNAME:([^\]]+)")
@@ -670,37 +845,61 @@ def _(locations, mo, observations_filtered, pl):
 
 
 @app.cell(hide_code=True)
-def _(camera_map, hex_summary, pl):
-    # Selection bridge: pointIndex on choroplethmap -> hex_id -> all location_ids
-    # inside that hex. Defensive against future customdata changes.
+def _(camera_map, hex_summary, map_display_mode, pl):
+    # Selection bridge for either hex cells or exact site points.
     _v = camera_map.value if hasattr(camera_map, "value") else []
 
     selected_location_ids = []
     if _v:
-        _hex_id_list = hex_summary["h3_id"].to_list()
-        _hex_ids = []
-        for _p in _v:
-            _cd = _p.get("customdata")
-            if _cd:
-                _hex_ids.append(_cd[0] if isinstance(_cd, (list, tuple)) else _cd)
-                continue
-            _idx = _p.get("pointIndex")
-            if _idx is None:
-                _idx = _p.get("pointNumber")
-            if isinstance(_idx, int) and 0 <= _idx < len(_hex_id_list):
-                _hex_ids.append(_hex_id_list[_idx])
-        _seen = set()
-        for _r in hex_summary.filter(pl.col("h3_id").is_in(_hex_ids)).iter_rows(named=True):
-            for _lid in _r["location_ids"]:
-                if _lid not in _seen:
-                    _seen.add(_lid)
-                    selected_location_ids.append(_lid)
+        if map_display_mode.value == "points":
+            _seen = set()
+            for _p in _v:
+                _cd = _p.get("customdata")
+                if _cd:
+                    _lid = _cd[0] if isinstance(_cd, (list, tuple)) else _cd
+                    if _lid not in _seen:
+                        _seen.add(_lid)
+                        selected_location_ids.append(_lid)
+        else:
+            _hex_id_list = hex_summary["h3_id"].to_list()
+            _hex_ids = []
+            for _p in _v:
+                _cd = _p.get("customdata")
+                if _cd:
+                    _hex_ids.append(_cd[0] if isinstance(_cd, (list, tuple)) else _cd)
+                    continue
+                _idx = _p.get("pointIndex")
+                if _idx is None:
+                    _idx = _p.get("pointNumber")
+                if isinstance(_idx, int) and 0 <= _idx < len(_hex_id_list):
+                    _hex_ids.append(_hex_id_list[_idx])
+            _seen = set()
+            for _r in hex_summary.filter(pl.col("h3_id").is_in(_hex_ids)).iter_rows(named=True):
+                for _lid in _r["location_ids"]:
+                    if _lid not in _seen:
+                        _seen.add(_lid)
+                        selected_location_ids.append(_lid)
     return (selected_location_ids,)
 
 
 @app.cell(hide_code=True)
-def _(hex_geojson, hex_summary, mo):
-    # Hexbin map. Click a hex (or box-select) to drive the summary card and grid.
+def _(mo):
+    map_display_mode = mo.ui.dropdown(
+        options={
+            "Hex cells": "hex",
+            "Exact sites": "points",
+        },
+        value="Hex cells",
+        label="Map display",
+        full_width=False,
+    )
+    map_display_mode
+    return (map_display_mode,)
+
+
+@app.cell(hide_code=True)
+def _(hex_geojson, hex_summary, map_display_mode, mo):
+    # Map. Choose hex cells for protected display or exact site points for precise QA.
     import plotly.graph_objects as go
 
     if hex_summary.height == 0:
@@ -717,40 +916,159 @@ def _(hex_geojson, hex_summary, mo):
         _customdata = list(zip(_ids, _cam, _check, _recent, _rpc, _names_list))
         _center_lats = hex_summary["center_lat"].to_list()
         _center_lngs = hex_summary["center_lng"].to_list()
+        _earth_colors = [
+            [0.00, "#f5ead6"],
+            [0.20, "#d9c28c"],
+            [0.45, "#a7a96b"],
+            [0.70, "#8a6f3d"],
+            [1.00, "#5f3b24"],
+        ]
+        _raster_sources = {
+            "topo": dict(
+                sourcetype="raster",
+                source=["https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="USGS The National Map",
+                below="traces",
+            ),
+            "imagery": dict(
+                sourcetype="raster",
+                source=["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="Esri World Imagery",
+                below="traces",
+            ),
+            "shaded_relief": dict(
+                sourcetype="raster",
+                source=["https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="USGS 3DEP Shaded Relief",
+                below="traces",
+            ),
+            "shaded_relief_labels": dict(
+                sourcetype="raster",
+                source=["https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="Esri World Boundaries and Places",
+            ),
+            "shaded_relief_roads": dict(
+                sourcetype="raster",
+                source=["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="Esri World Topographic Map",
+                opacity=0.55,
+                below="traces",
+            ),
+            "stewardship": dict(
+                sourcetype="raster",
+                source=["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],
+                sourceattribution="Esri World Topographic Map",
+                below="traces",
+            ),
+        }
+        _basemaps = {
+            "Topo": ("white-bg", [_raster_sources["topo"]]),
+            "Imagery": ("white-bg", [_raster_sources["imagery"]]),
+            "Shaded relief": (
+                "white-bg",
+                [
+                _raster_sources["shaded_relief"],
+                _raster_sources["shaded_relief_roads"],
+                _raster_sources["shaded_relief_labels"],
+                ],
+            ),
+            "Stewardship": ("white-bg", [_raster_sources["stewardship"]]),
+            "OpenStreetMap": ("open-street-map", []),
+            "Light": ("carto-positron", []),
+        }
+        _map_style, _map_layers = _basemaps["Topo"]
 
-        camera_fig = go.Figure(
-            go.Choroplethmap(
-                geojson=hex_geojson,
-                locations=_ids,
-                z=_z,
-                featureidkey="properties.h3_id",
-                colorscale="YlGnBu",
-                marker=dict(line=dict(color="rgba(60,60,60,0.6)", width=1), opacity=0.7),
-                colorbar=dict(title="Species<br>richness", x=0.02, len=0.5, thickness=12),
-                customdata=_customdata,
-                hovertemplate=(
-                    "<b>Hex %{customdata[0]}</b><br>"
-                    "<b>Species richness</b>: %{z}<br>"
-                    "<b>Number of cameras</b>: %{customdata[1]}<br>"
-                    "<b>Total observations</b>: %{customdata[2]}<br>"
-                    "<b>Most recent</b>: %{customdata[3]}<br>"
-                    "<b>Richness per camera</b>: %{customdata[4]}<br>"
-                    "<i>%{customdata[5]}</i><extra></extra>"
-                ),
+        if map_display_mode.value == "points":
+            _point_rows = []
+            for _r in hex_summary.iter_rows(named=True):
+                for _lid, _lname in zip(_r["location_ids"], _r["location_names"]):
+                    _point_rows.append({
+                        "location_id": _lid,
+                        "location_name": _lname,
+                        "lat": _r["center_lat"],
+                        "lon": _r["center_lng"],
+                        "species_richness": _r["species_richness"],
+                        "checklists": _r["checklists"],
+                        "most_recent": _r["most_recent"],
+                    })
+            camera_fig = go.Figure(
+                go.Scattermap(
+                    lat=[r["lat"] for r in _point_rows],
+                    lon=[r["lon"] for r in _point_rows],
+                    mode="markers",
+                    marker=dict(size=14, color="#5f3b24", opacity=0.9),
+                    customdata=[
+                        (r["location_id"], r["location_name"], r["species_richness"], r["checklists"], r["most_recent"])
+                        for r in _point_rows
+                    ],
+                    hovertemplate=(
+                        "<b>%{customdata[1]}</b><br>"
+                        "<b>Site</b>: %{customdata[0]}<br>"
+                        "<b>Species richness</b>: %{customdata[2]}<br>"
+                        "<b>Total observations</b>: %{customdata[3]}<br>"
+                        "<b>Most recent</b>: %{customdata[4]}<extra></extra>"
+                    ),
+                )
             )
-        )
+        else:
+            camera_fig = go.Figure(
+                go.Choroplethmap(
+                    geojson=hex_geojson,
+                    locations=_ids,
+                    z=_z,
+                    featureidkey="properties.h3_id",
+                    colorscale=_earth_colors,
+                    marker=dict(line=dict(color="rgba(54,43,25,0.9)", width=1.6), opacity=0.8),
+                    selected=dict(marker=dict(opacity=0.95)),
+                    unselected=dict(marker=dict(opacity=0.48)),
+                    colorbar=dict(title="Species<br>richness", x=0.02, len=0.5, thickness=12),
+                    customdata=_customdata,
+                    hovertemplate=(
+                        "<b>Species richness</b>: %{z}<br>"
+                        "<b>Number of cameras</b>: %{customdata[1]}<br>"
+                        "<b>Total observations</b>: %{customdata[2]}<br>"
+                        "<b>Most recent</b>: %{customdata[3]}<br>"
+                        "<b>Richness per camera</b>: %{customdata[4]}<br>"
+                        "<i>%{customdata[5]}</i><extra></extra>"
+                    ),
+                )
+            )
 
         _center_lat = sum(_center_lats) / len(_center_lats)
         _center_lng = sum(_center_lngs) / len(_center_lngs)
         camera_fig.update_layout(
-            map=dict(style="open-street-map",
-                     center=dict(lat=_center_lat, lon=_center_lng),
-                     zoom=7),
+            map=dict(
+                style=_map_style,
+                layers=_map_layers,
+                center=dict(lat=_center_lat, lon=_center_lng),
+                zoom=7,
+                uirevision="camera-map-view",
+            ),
             margin=dict(l=0, r=0, t=0, b=0),
             height=520,
             showlegend=False,
             clickmode="event+select",
             dragmode="pan",
+            uirevision="camera-map-view",
+            updatemenus=[
+                dict(
+                    buttons=[
+                        dict(
+                            label=_label,
+                            method="relayout",
+                            args=[{"map.style": _style, "map.layers": _layers}],
+                        )
+                        for _label, (_style, _layers) in _basemaps.items()
+                    ],
+                    direction="down",
+                    showactive=True,
+                    x=0.01,
+                    xanchor="left",
+                    y=0.99,
+                    yanchor="top",
+                    bgcolor="rgba(255,255,255,0.92)",
+                )
+            ],
         )
         camera_map = mo.ui.plotly(camera_fig)
 
@@ -777,7 +1095,7 @@ def _(locations, mo, pl, selected_location_ids):
 
 @app.cell(hide_code=True)
 def _(
-    date_range,
+    end_date_filter,
     exclude_common,
     locations,
     media_filtered,
@@ -785,6 +1103,7 @@ def _(
     observations_filtered,
     pl,
     selected_location_ids,
+    start_date_filter,
 ):
     from html import escape as _esc
 
@@ -882,7 +1201,7 @@ def _(
         _filter_notes = []
         if exclude_common.value:
             _filter_notes.append(f"excluding: <i>{_esc(', '.join(exclude_common.value))}</i>")
-        _filter_notes.append(f"date: {date_range.value[0]} \u2192 {date_range.value[1]}")
+        _filter_notes.append(f"date: {start_date_filter.value} \u2192 {end_date_filter.value}")
         _filter_notes.append(f"{len(selected_location_ids)} location(s) selected")
         _notes = mo.Html(
             "<div style='margin:6px 0 0; font-size:12px; color:#777;'>"
