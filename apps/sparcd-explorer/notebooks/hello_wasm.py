@@ -54,18 +54,18 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
         value=DEFAULT_ENDPOINT,
         label="Endpoint",
         placeholder="host[:port] or https://host",
-        full_width=True,
+        full_width=False,
     )
     _access_in = mo.ui.text(
         value=DEFAULT_ACCESS,
         label="Access key",
-        full_width=True,
+        full_width=False,
     )
     _secret_in = mo.ui.text(
         value=DEFAULT_SECRET,
         label="Secret key",
         kind="password",
-        full_width=True,
+        full_width=False,
     )
     _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS (when no scheme in endpoint)")
 
@@ -82,11 +82,11 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
         .batch(endpoint=_endpoint_in, access=_access_in, secret=_secret_in, secure=_secure_in)
         .form(label="Credentials", bordered=True, show_clear_button=True)
     )
-    _logo_path = _Path("assets/sparcd-favicon.ico")
+    _logo_path = _Path("assets/sparcd-logo-sharp.png")
     _logo = mo.image(
         src=str(_logo_path),
         alt="SPARC'd logo",
-        width=120,
+        width=132,
     ) if _logo_path.exists() else mo.md("")
     _project_header = mo.hstack(
         [
@@ -97,10 +97,22 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
             ),
             _logo,
         ],
-        widths=[4, 1],
+        widths=[5, 1],
         align="center",
     )
-    mo.vstack([_project_header, creds_form])
+    mo.Html(
+        "<style>"
+        ".sparcd-creds-wrap form { max-width: 440px; }"
+        ".sparcd-creds-wrap input { max-width: 360px; }"
+        ".sparcd-creds-wrap .markdown { margin-block: 0.2rem; }"
+        "</style>"
+    )
+    mo.vstack([
+        _project_header,
+        mo.Html("<div class='sparcd-creds-wrap'>"),
+        mo.hstack([creds_form], widths=[1]),
+        mo.Html("</div>"),
+    ])
     return (creds_form,)
 
 
@@ -898,7 +910,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(hex_geojson, hex_summary, map_display_mode, mo):
+def _(hex_geojson, hex_summary, locations, map_display_mode, mo):
     # Map. Choose hex cells for protected display or exact site points for precise QA.
     import plotly.graph_objects as go
 
@@ -979,18 +991,22 @@ def _(hex_geojson, hex_summary, map_display_mode, mo):
         _map_style, _map_layers = _basemaps["Topo"]
 
         if map_display_mode.value == "points":
-            _point_rows = []
+            _hex_lookup = {}
             for _r in hex_summary.iter_rows(named=True):
-                for _lid, _lname in zip(_r["location_ids"], _r["location_names"]):
-                    _point_rows.append({
-                        "location_id": _lid,
-                        "location_name": _lname,
-                        "lat": _r["center_lat"],
-                        "lon": _r["center_lng"],
-                        "species_richness": _r["species_richness"],
-                        "checklists": _r["checklists"],
-                        "most_recent": _r["most_recent"],
-                    })
+                for _lid in _r["location_ids"]:
+                    _hex_lookup[_lid] = _r
+            _point_rows = [
+                {
+                    "location_id": _r["location_id"],
+                    "location_name": _r["location_name"],
+                    "lat": _r["latitude"],
+                    "lon": _r["longitude"],
+                    "species_richness": _hex_lookup.get(_r["location_id"], {}).get("species_richness", 0),
+                    "checklists": _hex_lookup.get(_r["location_id"], {}).get("checklists", 0),
+                    "most_recent": _hex_lookup.get(_r["location_id"], {}).get("most_recent", "\u2014"),
+                }
+                for _r in locations.iter_rows(named=True)
+            ]
             camera_fig = go.Figure(
                 go.Scattermap(
                     lat=[r["lat"] for r in _point_rows],
@@ -1072,8 +1088,73 @@ def _(hex_geojson, hex_summary, map_display_mode, mo):
         )
         camera_map = mo.ui.plotly(camera_fig)
 
-    camera_map
+    None
     return (camera_map,)
+
+
+@app.cell(hide_code=True)
+def _(camera_map, hex_summary, locations, mo, observations_filtered, pl, selected_location_ids):
+    import re as _re
+
+    def _card_row(label, value):
+        return (
+            "<div style='display:flex; justify-content:space-between; gap:12px; "
+            "padding:5px 0; border-bottom:1px solid #eee;'>"
+            f"<span style='color:#5b5548;'>{label}</span>"
+            f"<strong style='color:#2f2618; text-align:right;'>{value}</strong></div>"
+        )
+
+    def _species_list(dep_ids):
+        _obs = observations_filtered.filter(pl.col("deployment_id").is_in(dep_ids))
+        _pat = _re.compile(r"COMMONNAME:([^\]]+)")
+        _counts = {}
+        for _row in _obs.select("tags", "media_path").iter_rows(named=True):
+            _names = set(_pat.findall(_row["tags"] or ""))
+            for _name in _names:
+                _counts[_name] = _counts.get(_name, 0) + 1
+        return sorted(_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+
+    if selected_location_ids:
+        _selected = locations.filter(pl.col("location_id").is_in(selected_location_ids))
+        _dep_ids = [d for ds in _selected["deployment_ids"].to_list() for d in ds]
+        _species = _species_list(_dep_ids)
+        _species_rows = "".join(
+            _card_row(name, count)
+            for name, count in _species[:12]
+        ) or "<div style='color:#777; padding-top:6px;'>No species in current filters.</div>"
+        _panel_title = "Selected area"
+        _summary = (
+            _card_row("Sites", _selected.height)
+            + _card_row("Images", int(_selected["image_count"].sum()))
+            + _card_row("Tagged images", int(_selected["tagged_image_count"].sum()))
+            + _card_row("Species", len(_species))
+        )
+    else:
+        _dep_ids = [d for ds in locations["deployment_ids"].to_list() for d in ds] if locations.height else []
+        _species = _species_list(_dep_ids)
+        _species_rows = "".join(
+            _card_row(name, count)
+            for name, count in _species[:10]
+        ) or "<div style='color:#777; padding-top:6px;'>No species in current filters.</div>"
+        _panel_title = "Current map"
+        _summary = (
+            _card_row("Map cells", hex_summary.height)
+            + _card_row("Sites", locations.height)
+            + _card_row("Images", int(locations["image_count"].sum()) if locations.height else 0)
+            + _card_row("Species", len(_species))
+        )
+
+    map_dashboard = mo.Html(
+        "<div style='border:1px solid #ddd4c2; border-radius:8px; padding:12px; "
+        "background:#fbfaf6; min-width:220px;'>"
+        f"<div style='font-size:18px; font-weight:700; color:#2f2618; margin-bottom:8px;'>{_panel_title}</div>"
+        f"{_summary}"
+        "<div style='font-size:14px; font-weight:700; color:#2f2618; margin-top:12px;'>Species detected</div>"
+        f"{_species_rows}"
+        "</div>"
+    )
+    mo.hstack([camera_map, map_dashboard], widths=[3, 1], align="start")
+    return
 
 
 @app.cell(hide_code=True)
