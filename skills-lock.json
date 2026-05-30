@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "browser-tools/SKILL.md",
       "computedHash": "84d66f8bfdd5cfdb0b6f448b61f192c504e4ffa9e4943969c1d394e5eed0daee"
+    },
+    "marimo-pair": {
+      "source": "marimo-team/marimo-pair",
+      "sourceType": "github",
+      "skillPath": "skills/marimo-pair/SKILL.md",
+      "computedHash": "e70c52b4cbd95e17c5109834d60fe0e4dbbc15ff400325461e94d36ec96077f2"
     }
   }
 }
