@@ -83,7 +83,7 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
         alt="SPARC'd logo",
         width=132,
     ) if _logo_path.exists() else mo.md("")
-    _project_header = mo.hstack(
+    project_header = mo.hstack(
         [
             mo.Html(
                 "<div style='font-size:34px; line-height:1.12; font-weight:800;'>"
@@ -100,15 +100,45 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
         ".sparcd-creds-wrap form { max-width: 440px; }"
         ".sparcd-creds-wrap input { max-width: 360px; }"
         ".sparcd-creds-wrap .markdown { margin-block: 0.2rem; }"
+        ".sparcd-connected-note { color:#5b5548; font-size:14px; margin-top:0.25rem; }"
         "</style>"
     )
+    return creds_form, project_header
+
+
+@app.cell(hide_code=True)
+def _(
+    DEFAULT_ACCESS,
+    DEFAULT_ENDPOINT,
+    DEFAULT_SECRET,
+    creds_form,
+    mo,
+    project_header,
+):
+    _has_env_defaults = bool(DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET)
+    _form_value = creds_form.value
+    _connected_source = "submitted form" if _form_value is not None else ".env defaults"
+    _connected_note = mo.Html(
+        "<div class='sparcd-connected-note'>Connected. Credentials loaded from "
+        f"{_connected_source}.</div>"
+    )
+    _connected_panel = mo.ui.tabs(
+        {
+            "Connected": _connected_note,
+            "Change credentials": creds_form,
+        },
+        value="Connected",
+    )
+    _credential_panel = (
+        mo.hstack([creds_form], widths=[1])
+        if _form_value is None and not _has_env_defaults
+        else _connected_panel
+    )
     mo.vstack([
-        _project_header,
-        mo.Html("<div class='sparcd-creds-wrap'>"),
-        mo.hstack([creds_form], widths=[1]),
-        mo.Html("</div>"),
+        project_header,
+        _credential_panel,
     ])
-    return (creds_form,)
+    return
 
 
 @app.cell(hide_code=True)
