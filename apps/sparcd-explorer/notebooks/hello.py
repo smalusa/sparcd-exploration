@@ -29,19 +29,37 @@ def _():
     DEFAULT_ACCESS = os.getenv("SPARCD_S3_ACCESS_KEY", "")
     DEFAULT_SECRET = os.getenv("SPARCD_S3_SECRET_KEY", "")
     DEFAULT_SECURE = os.getenv("SPARCD_S3_SECURE", "true").lower() == "true"
+    SPARCD_COLLECTION_DATA_CACHE = {}
     return (
         DEFAULT_ACCESS,
         DEFAULT_ENDPOINT,
         DEFAULT_SECRET,
         DEFAULT_SECURE,
         Minio,
+        SPARCD_COLLECTION_DATA_CACHE,
         mo,
         urlparse,
     )
 
 
 @app.cell(hide_code=True)
-def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
+def _(mo):
+    secret_visibility = mo.ui.dropdown(
+        options={
+            "Hide secret key": "password",
+            "Show secret key": "text",
+        },
+        value="Hide secret key",
+        label="Secret key display",
+        full_width=False,
+    )
+    change_credentials = mo.ui.checkbox(value=False, label="Change credentials")
+    None
+    return change_credentials, secret_visibility
+
+
+@app.cell(hide_code=True)
+def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo, secret_visibility):
     # S3 / MinIO credentials. Edit and click Submit. Values prefill from .env if present.
     from pathlib import Path as _Path
 
@@ -59,10 +77,10 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
     _secret_in = mo.ui.text(
         value=DEFAULT_SECRET,
         label="Secret key",
-        kind="password",
+        kind=secret_visibility.value,
         full_width=False,
     )
-    _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS (when no scheme in endpoint)")
+    _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS")
 
     creds_form = (
         mo.md("""
@@ -74,7 +92,12 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
 
         {secure}
         """)
-        .batch(endpoint=_endpoint_in, access=_access_in, secret=_secret_in, secure=_secure_in)
+        .batch(
+            endpoint=_endpoint_in,
+            access=_access_in,
+            secret=_secret_in,
+            secure=_secure_in,
+        )
         .form(label="Credentials", bordered=True, show_clear_button=True)
     )
     _logo_path = _Path("assets/sparcd-logo-sharp.png")
@@ -97,10 +120,9 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo):
     )
     mo.Html(
         "<style>"
-        ".sparcd-creds-wrap form { max-width: 440px; }"
-        ".sparcd-creds-wrap input { max-width: 360px; }"
+        ".sparcd-creds-wrap form { max-width: 720px; }"
+        ".sparcd-creds-wrap input { max-width: 640px; }"
         ".sparcd-creds-wrap .markdown { margin-block: 0.2rem; }"
-        ".sparcd-connected-note { color:#5b5548; font-size:14px; margin-top:0.25rem; }"
         "</style>"
     )
     return creds_form, project_header
@@ -111,29 +133,20 @@ def _(
     DEFAULT_ACCESS,
     DEFAULT_ENDPOINT,
     DEFAULT_SECRET,
+    change_credentials,
     creds_form,
     mo,
     project_header,
+    secret_visibility,
 ):
-    _has_env_defaults = bool(DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET)
-    _form_value = creds_form.value
-    _connected_source = "submitted form" if _form_value is not None else ".env defaults"
-    _connected_note = mo.Html(
-        "<div class='sparcd-connected-note'>Connected. Credentials loaded from "
-        f"{_connected_source}.</div>"
-    )
-    _connected_panel = mo.ui.tabs(
-        {
-            "Connected": _connected_note,
-            "Change credentials": creds_form,
-        },
-        value="Connected",
-    )
-    _credential_panel = (
-        mo.hstack([creds_form], widths=[1])
-        if _form_value is None and not _has_env_defaults
-        else _connected_panel
-    )
+    _has_credentials = bool(DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET) or creds_form.value is not None
+    if _has_credentials and not change_credentials.value:
+        _credential_panel = change_credentials
+    else:
+        _items = [secret_visibility, creds_form]
+        if _has_credentials:
+            _items.insert(0, change_credentials)
+        _credential_panel = mo.vstack(_items)
     mo.vstack([
         project_header,
         _credential_panel,
@@ -174,14 +187,12 @@ def _(
     if "://" in _raw:
         _u = urlparse(_raw)
         _ep = _u.netloc
-        _secure = _u.scheme == "https"
     else:
         _ep = _raw
-        _secure = bool(_creds["secure"])
+    _secure = bool(_creds["secure"])
 
     client = Minio(_ep, access_key=_creds["access"], secret_key=_creds["secret"], secure=_secure)
-    _creds_source = "form" if _form_value is not None else ".env defaults"
-    mo.md(f"\u2705 Connected to `{_ep}` (secure={_secure}) \u00b7 from {_creds_source}.")
+    None
     return (client,)
 
 
@@ -212,7 +223,7 @@ def _(client, mo):
 
 @app.cell(hide_code=True)
 def _(collections_registry, mo):
-    # Multi-select collection picker.
+    # Collection changes are loaded only when the user submits the form.
     _options = {f"{c['name']}   ({c['org']})" if c['org'] else c['name']: c['bucket']
                 for c in collections_registry}
 
@@ -227,17 +238,31 @@ def _(collections_registry, mo):
         label="Collection",
         full_width=False,
     )
+    DEFAULT_COLLECTION_BUCKETS = [_options[_default]] if _default else []
+    collection_load_form = (
+        mo.md("{collections}")
+        .batch(collections=collection_picker)
+        .form(
+            label="",
+            bordered=False,
+            submit_button_label="Load selected collection",
+            show_clear_button=False,
+        )
+    )
     None
-    return (collection_picker,)
+    return DEFAULT_COLLECTION_BUCKETS, collection_load_form
 
 
 @app.cell(hide_code=True)
-def _(collection_picker):
+def _(DEFAULT_COLLECTION_BUCKETS, collection_load_form):
     # Selected buckets + their UUIDs / prefixes (lists, plural).
-    BUCKETS = list(collection_picker.value or [])
+    _submitted = collection_load_form.value
+    BUCKETS = list((_submitted or {}).get("collections") or DEFAULT_COLLECTION_BUCKETS)
     COLLECTION_UUIDS = [b.removeprefix("sparcd-") for b in BUCKETS]
-    UPLOADS_PREFIXES = [(b, f"Collections/{u}/Uploads/")
-                        for b, u in zip(BUCKETS, COLLECTION_UUIDS)]
+    UPLOADS_PREFIXES = [
+        (b, f"Collections/{b.removeprefix('sparcd-')}/Uploads/")
+        for b in BUCKETS
+    ]
     None
     return BUCKETS, UPLOADS_PREFIXES
 
@@ -252,7 +277,7 @@ def _(BUCKETS, mo):
 
 
 @app.cell(hide_code=True)
-def _(BUCKETS, UPLOADS_PREFIXES, client, mo):
+def _(BUCKETS, SPARCD_COLLECTION_DATA_CACHE, UPLOADS_PREFIXES, client, mo):
     import csv
     import io
 
@@ -292,61 +317,81 @@ def _(BUCKETS, UPLOADS_PREFIXES, client, mo):
     _obs_rows, _obs_buckets = [], []
     total_uploads = 0
 
-    for bucket, prefix in UPLOADS_PREFIXES:
-        try:
-            uploads = [
-                o.object_name
-                for o in client.list_objects(bucket, prefix=prefix, recursive=False)
-                if o.is_dir and o.object_name != prefix
-            ]
-        except Exception:
-            uploads = []
-        total_uploads += len(uploads)
-        for up in uploads:
-            try:
-                rows = _read_csv(bucket, up + "deployments.csv")
-                _dep_rows += rows
-                _dep_buckets += [bucket] * len(rows)
-            except Exception:
-                pass
-            try:
-                rows = _read_csv(bucket, up + "media.csv")
-                _media_rows += rows
-                _media_buckets += [bucket] * len(rows)
-            except Exception:
-                pass
-            try:
-                rows = _read_csv(bucket, up + "observations.csv")
-                _obs_rows += rows
-                _obs_buckets += [bucket] * len(rows)
-            except Exception:
-                pass
+    _cache = SPARCD_COLLECTION_DATA_CACHE
+    _cache_key = tuple(BUCKETS)
+    _cached = _cache.get(_cache_key)
 
-    deployments = (
-        _to_df(_dep_rows, _dep_buckets, DEPLOY_COLS + [f"_d{i}" for i in range(13, 50)])
-        .select(DEPLOY_COLS + ["bucket"])
-        .with_columns(
-            pl.col("latitude").cast(pl.Float64, strict=False),
-            pl.col("longitude").cast(pl.Float64, strict=False),
-            pl.col("elevation").cast(pl.Float64, strict=False),
+    if _cached is None:
+        for bucket, prefix in UPLOADS_PREFIXES:
+            try:
+                uploads = [
+                    o.object_name
+                    for o in client.list_objects(bucket, prefix=prefix, recursive=False)
+                    if o.is_dir and o.object_name != prefix
+                ]
+            except Exception:
+                uploads = []
+            total_uploads += len(uploads)
+            for up in uploads:
+                try:
+                    rows = _read_csv(bucket, up + "deployments.csv")
+                    _dep_rows += rows
+                    _dep_buckets += [bucket] * len(rows)
+                except Exception:
+                    pass
+                try:
+                    rows = _read_csv(bucket, up + "media.csv")
+                    _media_rows += rows
+                    _media_buckets += [bucket] * len(rows)
+                except Exception:
+                    pass
+                try:
+                    rows = _read_csv(bucket, up + "observations.csv")
+                    _obs_rows += rows
+                    _obs_buckets += [bucket] * len(rows)
+                except Exception:
+                    pass
+
+        deployments = (
+            _to_df(_dep_rows, _dep_buckets, DEPLOY_COLS + [f"_d{i}" for i in range(13, 50)])
+            .select(DEPLOY_COLS + ["bucket"])
+            .with_columns(
+                pl.col("latitude").cast(pl.Float64, strict=False),
+                pl.col("longitude").cast(pl.Float64, strict=False),
+                pl.col("elevation").cast(pl.Float64, strict=False),
+            )
+            .filter(pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null())
         )
-        .filter(pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null())
-    )
-    media = (
-        _to_df(_media_rows, _media_buckets, MEDIA_COLS + [f"_m{i}" for i in range(50)])
-        .select(MEDIA_COLS + ["bucket"])
-    )
-    observations = (
-        _to_df(_obs_rows, _obs_buckets, OBS_COLS + [f"_o{i}" for i in range(50)])
-        .select(OBS_COLS + ["bucket"])
-    )
+        media = (
+            _to_df(_media_rows, _media_buckets, MEDIA_COLS + [f"_m{i}" for i in range(50)])
+            .select(MEDIA_COLS + ["bucket"])
+        )
+        observations = (
+            _to_df(_obs_rows, _obs_buckets, OBS_COLS + [f"_o{i}" for i in range(50)])
+            .select(OBS_COLS + ["bucket"])
+        )
+        _cached = {
+            "deployments": deployments,
+            "media": media,
+            "observations": observations,
+            "total_uploads": total_uploads,
+        }
+        _cache[_cache_key] = _cached
+        _cache_status = "loaded from S3"
+    else:
+        _cache_status = "reused from cache"
+
+    deployments = _cached["deployments"]
+    media = _cached["media"]
+    observations = _cached["observations"]
+    total_uploads = _cached["total_uploads"]
 
     mo.md(
         f"**Loaded:** {len(BUCKETS)} collection(s) \u00b7 "
         f"{total_uploads} upload(s) \u00b7 "
         f"{deployments.height} deployment row(s) \u00b7 "
         f"{media.height} media \u00b7 "
-        f"{observations.height} observation(s)."
+        f"{observations.height} observation(s) \u00b7 {_cache_status}."
     )
     return deployments, media, observations, pl
 
@@ -385,7 +430,7 @@ def _(mo, observations, pl):
 
 
 @app.cell(hide_code=True)
-def _(collection_picker, deployments, end_date_filter, mo, observations, pl, start_date_filter):
+def _(collection_load_form, deployments, end_date_filter, mo, observations, pl, start_date_filter):
     # Query filters. Options are built in Python for Pyodide/WASM compatibility.
     import re as _re
 
@@ -509,14 +554,23 @@ def _(collection_picker, deployments, end_date_filter, mo, observations, pl, sta
         label="Elevation display",
         full_width=False,
     )
+    map_display_mode = mo.ui.dropdown(
+        options={
+            "Hex cells": "hex",
+            "Exact sites": "points",
+        },
+        value="Hex cells",
+        label="Map display",
+        full_width=False,
+    )
     mo.vstack([
         mo.md("**Query filters**"),
-        mo.hstack([collection_picker, mountain_range_filter, site_code_filter], widths="equal"),
+        mo.hstack([collection_load_form, mountain_range_filter, site_code_filter], widths="equal"),
         mo.hstack([start_date_filter, end_date_filter, year_filter], widths="equal"),
         mo.hstack([month_filter, include_common, elevation_range_filter], widths="equal"),
         mo.hstack([exclude_common, show_species_columns], widths=[2, 1]),
         mo.hstack([coordinate_format, coordinate_method, coordinate_digits], widths="equal"),
-        mo.hstack([elevation_unit], widths=[1]),
+        mo.hstack([elevation_unit, map_display_mode], widths="equal"),
     ])
     return (
         coordinate_digits,
@@ -526,6 +580,7 @@ def _(collection_picker, deployments, end_date_filter, mo, observations, pl, sta
         elevation_range_filter,
         exclude_common,
         include_common,
+        map_display_mode,
         month_filter,
         mountain_range_filter,
         show_species_columns,
@@ -877,7 +932,7 @@ def _(locations, mo, observations_filtered, pl):
             for _hid in hex_summary["h3_id"].to_list()
         ],
     }
-    mo.md(f"_Binned {locations.height} location(s) into {hex_summary.height} hex(es) at H3 resolution {HEX_RESOLUTION}._")
+    None
     return hex_geojson, hex_summary
 
 
@@ -917,21 +972,6 @@ def _(camera_map, hex_summary, map_display_mode, pl):
                         _seen.add(_lid)
                         selected_location_ids.append(_lid)
     return (selected_location_ids,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    map_display_mode = mo.ui.dropdown(
-        options={
-            "Hex cells": "hex",
-            "Exact sites": "points",
-        },
-        value="Hex cells",
-        label="Map display",
-        full_width=False,
-    )
-    map_display_mode
-    return (map_display_mode,)
 
 
 @app.cell(hide_code=True)
@@ -1137,7 +1177,8 @@ def _(hex_geojson, hex_summary, locations, map_display_mode, mo):
 
 
 @app.cell(hide_code=True)
-def _(camera_map, hex_summary, locations, mo, observations_filtered, pl, selected_location_ids):
+def _(hex_summary, locations, mo, observations_filtered, pl, selected_location_ids):
+    import html as _html
     import re as _re
 
     def _card_row(label, value):
@@ -1147,6 +1188,31 @@ def _(camera_map, hex_summary, locations, mo, observations_filtered, pl, selecte
             f"<span style='color:#5b5548;'>{label}</span>"
             f"<strong style='color:#2f2618; text-align:right;'>{value}</strong></div>"
         )
+
+    def _small_note(text):
+        return f"<div style='color:#6f6658; font-size:12px; line-height:1.25; margin:6px 0;'>{text}</div>"
+
+    def _bar_chart(species_counts, limit=6):
+        if not species_counts:
+            return "<div style='color:#777; padding-top:6px;'>No species in current filters.</div>"
+        _max_count = max(count for _, count in species_counts[:limit]) or 1
+        _rows = []
+        for _name, _count in species_counts[:limit]:
+            _width = max(8, round((_count / _max_count) * 100))
+            _safe_name = _html.escape(_name)
+            _rows.append(
+                "<div style='margin:6px 0;'>"
+                "<div style='display:flex; justify-content:space-between; gap:8px; "
+                "font-size:12px; color:#3a3022;'>"
+                f"<span style='overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{_safe_name}</span>"
+                f"<strong>{_count}</strong>"
+                "</div>"
+                "<div style='height:7px; background:#e9e1d1; border-radius:999px; overflow:hidden;'>"
+                f"<div style='height:100%; width:{_width}%; background:#8a6f3d;'></div>"
+                "</div>"
+                "</div>"
+            )
+        return "".join(_rows)
 
     def _species_list(dep_ids):
         _obs = observations_filtered.filter(pl.col("deployment_id").is_in(dep_ids))
@@ -1167,11 +1233,21 @@ def _(camera_map, hex_summary, locations, mo, observations_filtered, pl, selecte
             for name, count in _species[:12]
         ) or "<div style='color:#777; padding-top:6px;'>No species in current filters.</div>"
         _panel_title = "Selected area"
+        _abundance = sum(count for _, count in _species)
+        _chart = _bar_chart(_species)
         _summary = (
             _card_row("Sites", _selected.height)
             + _card_row("Images", int(_selected["image_count"].sum()))
             + _card_row("Tagged images", int(_selected["tagged_image_count"].sum()))
-            + _card_row("Species", len(_species))
+            + _card_row("Richness", len(_species))
+            + _card_row("Abundance (detections)", _abundance)
+        )
+        _details = (
+            _small_note("Richness is the number of unique species detected. "
+                        "Abundance is the number of species detections in tagged images; "
+                        "it is not a population estimate.")
+            + "<div style='font-size:13px; font-weight:700; color:#2f2618; margin-top:10px;'>Abundance by species (detections)</div>"
+            + _chart
         )
     else:
         _dep_ids = [d for ds in locations["deployment_ids"].to_list() for d in ds] if locations.height else []
@@ -1187,18 +1263,20 @@ def _(camera_map, hex_summary, locations, mo, observations_filtered, pl, selecte
             + _card_row("Images", int(locations["image_count"].sum()) if locations.height else 0)
             + _card_row("Species", len(_species))
         )
+        _details = _small_note("Click a hex or site point to see richness, abundance, and a species chart.")
 
     map_dashboard = mo.Html(
-        "<div style='border:1px solid #ddd4c2; border-radius:8px; padding:12px; "
-        "background:#fbfaf6; min-width:220px;'>"
-        f"<div style='font-size:18px; font-weight:700; color:#2f2618; margin-bottom:8px;'>{_panel_title}</div>"
+        "<div style='border:1px solid #ddd4c2; border-radius:8px; padding:10px; "
+        "background:#fbfaf6; min-width:170px; max-width:210px;'>"
+        f"<div style='font-size:16px; font-weight:700; color:#2f2618; margin-bottom:7px;'>{_panel_title}</div>"
         f"{_summary}"
-        "<div style='font-size:14px; font-weight:700; color:#2f2618; margin-top:12px;'>Species detected</div>"
+        f"{_details}"
+        "<div style='font-size:13px; font-weight:700; color:#2f2618; margin-top:12px;'>Species detected</div>"
         f"{_species_rows}"
         "</div>"
     )
-    mo.hstack([camera_map, map_dashboard], widths=[3, 1], align="start")
-    return
+    None
+    return (map_dashboard,)
 
 
 @app.cell(hide_code=True)
@@ -1214,8 +1292,8 @@ def _(locations, mo, pl, selected_location_ids):
             f"### {len(selected_location_ids)} location(s): {_names}  \n"
             f"{_img} image(s) \u00b7 {_tag} tagged (after filters)"
         )
-    selection_summary
-    return
+    None
+    return (selection_summary,)
 
 
 @app.cell(hide_code=True)
@@ -1343,8 +1421,8 @@ def _(
             _notes,
         ])
 
-    location_summary_card
-    return
+    None
+    return (location_summary_card,)
 
 
 @app.cell(hide_code=True)
@@ -1499,7 +1577,7 @@ def _(
                 </figcaption>
               </figure>""")
         _grid = ('<div style="display:grid; '
-                 'grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); '
+                 'grid-template-columns: repeat(5, minmax(0, 1fr)); '
                  'gap:12px; margin-top:8px;">'
                  + "".join(_tiles) + "</div>")
         _status = mo.md(
@@ -1509,7 +1587,19 @@ def _(
         )
         thumbnail_grid = mo.vstack([_status, mo.Html(_grid)])
 
-    thumbnail_grid
+    None
+    return (thumbnail_grid,)
+
+
+@app.cell(hide_code=True)
+def _(camera_map, location_summary_card, map_dashboard, mo, selection_summary, thumbnail_grid):
+    _left = mo.vstack([
+        camera_map,
+        selection_summary,
+        location_summary_card,
+        thumbnail_grid,
+    ])
+    mo.hstack([_left, map_dashboard], widths=[5, 1], align="start")
     return
 
 
@@ -1604,8 +1694,8 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo, selected_location_ids, selected_total):
-    # Page selector. 12 thumbnails per page.
-    PAGE_SIZE = 12
+    # Page selector. 20 thumbnails per page.
+    PAGE_SIZE = 20
 
     def _make_page_selector():
         _trigger = tuple(selected_location_ids)  # re-create whenever selection changes
