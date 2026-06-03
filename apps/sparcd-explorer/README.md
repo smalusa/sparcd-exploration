@@ -20,6 +20,7 @@ From the repo root:
 ```sh
 pnpm dev --filter @sparcd/sparcd-explorer    # marimo edit --watch
 pnpm start --filter @sparcd/sparcd-explorer  # marimo run (read-only app mode)
+pnpm build --filter @sparcd/sparcd-explorer  # export static WASM app to dist/
 ```
 
 Or from this directory:
@@ -28,6 +29,13 @@ Or from this directory:
 pnpm dev      # marimo edit notebooks/hello.py --watch
 pnpm start    # marimo run notebooks/hello.py
 ```
+
+## Static deployment
+
+GitHub Pages deploys the WASM export from `notebooks/hello.py`. The notebook
+keeps its browser dependencies in the PEP 723 header at the top of the file,
+so local `pnpm build` and the Pages workflow export the same source notebook.
+Serve `dist/` over HTTP to preview the static bundle.
 
 ## Agent workflow
 

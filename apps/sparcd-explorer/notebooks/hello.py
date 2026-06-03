@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["marimo", "minio", "python-dotenv", "polars", "plotly", "h3"]
+# ///
+
 import marimo
 
 __generated_with = "0.23.8"
@@ -1623,6 +1628,11 @@ def _(mo, selected_images_all, selected_location_ids):
         label="Detection table species filter (empty = all detected species)",
         full_width=True,
     )
+    return detection_species_filter, show_image_event_table
+
+
+@app.cell(hide_code=True)
+def _(detection_species_filter, mo, selected_location_ids, show_image_event_table):
     if selected_location_ids and show_image_event_table.value:
         detection_table_controls = mo.vstack([
             mo.md("**Detection table filters**"),
@@ -1634,7 +1644,7 @@ def _(mo, selected_images_all, selected_location_ids):
     else:
         detection_table_controls = mo.md("")
     detection_table_controls
-    return detection_species_filter, show_image_event_table
+    return
 
 
 @app.cell(hide_code=True)
