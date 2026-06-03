@@ -183,20 +183,19 @@ def _(
     else:
         _creds = _form_value
 
-    mo.stop(
-        not _creds or not _creds.get("endpoint") or not _creds.get("access") or not _creds.get("secret"),
-        mo.md("**\u26a0\ufe0f Submit credentials above to load data.**"),
-    )
-
-    _raw = _creds["endpoint"]
-    if "://" in _raw:
-        _u = urlparse(_raw)
-        _ep = _u.netloc
+    _ready = bool(_creds and _creds.get("endpoint") and _creds.get("access") and _creds.get("secret"))
+    if not _ready:
+        client = None
     else:
-        _ep = _raw
-    _secure = bool(_creds["secure"])
+        _raw = _creds["endpoint"]
+        if "://" in _raw:
+            _u = urlparse(_raw)
+            _ep = _u.netloc
+        else:
+            _ep = _raw
+        _secure = bool(_creds["secure"])
 
-    client = Minio(_ep, access_key=_creds["access"], secret_key=_creds["secret"], secure=_secure)
+        client = Minio(_ep, access_key=_creds["access"], secret_key=_creds["secret"], secure=_secure)
     None
     return (client,)
 
@@ -206,20 +205,64 @@ def _(client, mo):
     # Collection registry. Reads every sparcd-<uuid> bucket's collection.json
     # so the picker can show human-readable names.
     import json as _json
+    from html import escape as _esc
     from minio.error import S3Error as _S3Error
 
-    _buckets = [b.name for b in client.list_buckets() if b.name.startswith("sparcd-")]
-
     collections_registry = []
-    for _b in _buckets:
-        _uuid = _b.removeprefix("sparcd-")
+    _connection_failed = False
+    if client is None:
+        mo.md("**Submit credentials above to load data.**")
+    else:
         try:
-            _meta = _json.loads(client.get_object(_b, f"Collections/{_uuid}/collection.json").read())
-            _name = _meta.get("nameProperty") or _meta.get("name") or _uuid
-            _org = _meta.get("organizationProperty") or ""
-            collections_registry.append({"bucket": _b, "uuid": _uuid, "name": _name, "org": _org})
-        except _S3Error:
-            continue
+            _buckets = [b.name for b in client.list_buckets() if b.name.startswith("sparcd-")]
+        except _S3Error as exc:
+            _detail = exc.code or exc.message or str(exc)
+            _hint = (
+                "Check the endpoint, access key, secret key, and HTTPS setting."
+                if exc.code in {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"}
+                else "Check the endpoint, credentials, and network access."
+            )
+            mo.Html(
+                "<div style='border:1px solid #d49b66; background:#fff7ed; color:#6b3a09; "
+                "border-radius:8px; padding:10px 12px; margin:8px 0;'>"
+                "<div style='font-weight:700;'>Could not connect to S3.</div>"
+                f"<div>{_esc(_hint)}</div>"
+                f"<div style='font-size:12px; color:#7c4a16; margin-top:4px;'>S3 response: {_esc(_detail)}</div>"
+                "</div>"
+            )
+            _connection_failed = True
+            _buckets = []
+        except Exception as exc:
+            mo.Html(
+                "<div style='border:1px solid #d49b66; background:#fff7ed; color:#6b3a09; "
+                "border-radius:8px; padding:10px 12px; margin:8px 0;'>"
+                "<div style='font-weight:700;'>Could not connect to S3.</div>"
+                "<div>Check the endpoint, credentials, and network access.</div>"
+                f"<div style='font-size:12px; color:#7c4a16; margin-top:4px;'>Error: {_esc(str(exc))}</div>"
+                "</div>"
+            )
+            _connection_failed = True
+            _buckets = []
+
+        if not _buckets and not _connection_failed:
+            mo.Html(
+                "<div style='border:1px solid #d49b66; background:#fff7ed; color:#6b3a09; "
+                "border-radius:8px; padding:10px 12px; margin:8px 0;'>"
+                "<div style='font-weight:700;'>No accessible SPARC'd collections found.</div>"
+                "<div>Check that the endpoint, access key, secret key, and HTTPS setting match an account "
+                "with access to the Educational Test collection.</div>"
+                "</div>"
+            )
+
+        for _b in _buckets:
+            _uuid = _b.removeprefix("sparcd-")
+            try:
+                _meta = _json.loads(client.get_object(_b, f"Collections/{_uuid}/collection.json").read())
+                _name = _meta.get("nameProperty") or _meta.get("name") or _uuid
+                _org = _meta.get("organizationProperty") or ""
+                collections_registry.append({"bucket": _b, "uuid": _uuid, "name": _name, "org": _org})
+            except _S3Error:
+                continue
 
     collections_registry.sort(key=lambda r: (r["name"].strip().lower(), r["bucket"]))
     None
@@ -382,9 +425,9 @@ def _(BUCKETS, SPARCD_COLLECTION_DATA_CACHE, UPLOADS_PREFIXES, client, mo):
             "total_uploads": total_uploads,
         }
         _cache[_cache_key] = _cached
-        _cache_status = "loaded from S3"
+        _cache_status = "no collection selected" if not BUCKETS else "loaded from S3"
     else:
-        _cache_status = "reused from cache"
+        _cache_status = "no collection selected" if not BUCKETS else "reused from cache"
 
     deployments = _cached["deployments"]
     media = _cached["media"]
