@@ -1,6 +1,6 @@
-# sparcd-exploration — context for Codex
+# sparcd-exploration — Codex instructions
 
-## What this project is
+## Project purpose
 
 A workspace for small, single-purpose, mostly-static tools that work
 **alongside** [SPARC'd](https://github.com/CulverLab/sparcd-web). SPARC'd is
@@ -56,14 +56,46 @@ don't grep, list, or fetch outside it on a hunch.
 
 ## Style preferences
 
+- Prefer the smallest correct change.
+- Keep code local and direct unless reuse is clearly valuable.
+- Do not add compatibility shims, generic abstractions, or fallback paths for
+  cases that cannot happen in practice.
+- Trust data shapes that have already been verified.
 - Tight, direct prose. No filler, no trailing summaries when a diff speaks
   for itself.
 - For notebooks: each cell should do one thing. Use `mo.md(...)` for
   human-facing context, raw expressions for data displays.
-- Don't add fallbacks, validation, or compatibility shims for cases that
-  can't happen in practice. Trust data shapes we've already verified.
 - Don't write code comments that just restate the code. Reserve comments
   for non-obvious *why*.
+
+## Verification
+
+- After changes, run the narrowest relevant verification command first.
+- Common commands include `pnpm install`,
+  `pnpm dev --filter @sparcd/sparcd-explorer`,
+  `pnpm build --filter @sparcd/sparcd-explorer`, `pnpm lint`, `pnpm check`,
+  and app-specific `uv run ...` commands.
+- If verification cannot be run, state why and identify the residual risk.
+
+## Git safety
+
+- The worktree may contain user changes.
+- Never revert, overwrite, or clean changes you did not make unless explicitly
+  asked.
+- Before broad edits, inspect the relevant files and preserve unrelated work.
+- Do not commit unless explicitly requested.
+
+## Cross-agent handoff
+
+- Keep durable project rules in `AGENTS.md`.
+- Keep temporary session state in a short handoff file such as
+  `docs/session-handoff.md`.
+- Do not rely on raw chat transcripts as project memory. Summarize only the
+  facts needed for the next agent to continue: what was decided, what changed,
+  what remains uncertain, and what should happen next.
+- When ending a substantial session, leave a concise handoff with the current
+  goal, decisions made, important files, commands run, known blockers, and the
+  next recommended step.
 
 ## Pointers
 
