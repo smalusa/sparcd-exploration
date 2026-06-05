@@ -49,22 +49,35 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    secret_visibility = mo.ui.dropdown(
-        options={
-            "Hide secret key": "password",
-            "Show secret key": "text",
-        },
-        value="Hide secret key",
-        label="Secret key display",
-        full_width=False,
+    show_credentials, set_show_credentials = mo.state(False)
+
+    def _set_show_credentials(value):
+        set_show_credentials(bool(value))
+
+    def collapse_credentials(value):
+        if value is not None:
+            set_show_credentials(False)
+
+    show_password = mo.ui.checkbox(value=False, label="Show password")
+    change_credentials = mo.ui.checkbox(
+        value=show_credentials(),
+        label="Use different credentials",
+        on_change=_set_show_credentials,
     )
-    change_credentials = mo.ui.checkbox(value=False, label="Change credentials")
     None
-    return change_credentials, secret_visibility
+    return change_credentials, collapse_credentials, show_credentials, show_password
 
 
 @app.cell(hide_code=True)
-def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo, secret_visibility):
+def _(
+    DEFAULT_ACCESS,
+    DEFAULT_ENDPOINT,
+    DEFAULT_SECRET,
+    DEFAULT_SECURE,
+    collapse_credentials,
+    mo,
+    show_password,
+):
     # S3 / MinIO credentials. Edit and click Submit. Values prefill from .env if present.
     from pathlib import Path as _Path
 
@@ -72,20 +85,21 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo, secr
         value=DEFAULT_ENDPOINT,
         label="Endpoint",
         placeholder="host[:port] or https://host",
-        full_width=False,
+        full_width=True,
     )
     _access_in = mo.ui.text(
         value=DEFAULT_ACCESS,
-        label="Access key",
-        full_width=False,
+        label="Username / access key",
+        full_width=True,
     )
     _secret_in = mo.ui.text(
         value=DEFAULT_SECRET,
-        label="Secret key",
-        kind=secret_visibility.value,
-        full_width=False,
+        label="Password",
+        kind="text" if show_password.value else "password",
+        full_width=True,
     )
     _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS")
+    _save_in = mo.ui.checkbox(value=False, label="Save username and password")
 
     creds_form = (
         mo.md("""
@@ -96,14 +110,23 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo, secr
         {secret}
 
         {secure}
+
+        {save}
         """)
         .batch(
             endpoint=_endpoint_in,
             access=_access_in,
             secret=_secret_in,
             secure=_secure_in,
+            save=_save_in,
         )
-        .form(label="Credentials", bordered=True, show_clear_button=True)
+        .form(
+            label="Credentials",
+            bordered=True,
+            submit_button_label="Sign in",
+            show_clear_button=True,
+            on_change=collapse_credentials,
+        )
     )
     _logo_path = _Path("assets/sparcd-logo-sharp.png")
     _logo = mo.image(
@@ -123,14 +146,91 @@ def _(DEFAULT_ACCESS, DEFAULT_ENDPOINT, DEFAULT_SECRET, DEFAULT_SECURE, mo, secr
         widths=[5, 1],
         align="center",
     )
-    mo.Html(
+    credentials_assets = mo.Html(
         "<style>"
-        ".sparcd-creds-wrap form { max-width: 720px; }"
-        ".sparcd-creds-wrap input { max-width: 640px; }"
-        ".sparcd-creds-wrap .markdown { margin-block: 0.2rem; }"
+        ".sparcd-credentials-form { width:min(64rem, 100%); max-width:64rem; }"
+        ".sparcd-credentials-form input[type='text'],"
+        ".sparcd-credentials-form input[type='password'] {"
+        "width:min(56rem, 100%); max-width:56rem;"
+        "}"
+        ".sparcd-credentials-form .markdown { margin-block:0.2rem; }"
         "</style>"
+        "<script>"
+        "(function(){"
+        "const storageKey='sparcd-explorer.credentials.v1';"
+        "function inputFor(labelText){"
+        "const labels=[...document.querySelectorAll('label')];"
+        "const label=labels.find((item)=>item.textContent.trim()===labelText);"
+        "if(!label){return null;}"
+        "let input=label.querySelector('input');"
+        "if(!input&&label.htmlFor){input=document.getElementById(label.htmlFor);}"
+        "if(!input){const field=label.closest('div'); input=field&&field.querySelector('input');}"
+        "return input||null;"
+        "}"
+        "function setInput(input,value){"
+        "if(!input||!value){return;}"
+        "const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'value').set;"
+        "setter.call(input,value);"
+        "input.dispatchEvent(new Event('input',{bubbles:true}));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "}"
+        "function setChecked(input,value){"
+        "if(!input){return;}"
+        "const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input),'checked').set;"
+        "setter.call(input,Boolean(value));"
+        "input.dispatchEvent(new Event('change',{bubbles:true}));"
+        "}"
+        "function credentialInputs(){"
+        "const endpoint=inputFor('Endpoint');"
+        "const access=inputFor('Username / access key');"
+        "const secret=inputFor('Password');"
+        "const save=inputFor('Save username and password');"
+        "const form=endpoint&&endpoint.closest('form');"
+        "if(form){form.classList.add('sparcd-credentials-form');}"
+        "if(endpoint){endpoint.autocomplete='url';}"
+        "if(access){access.autocomplete='username';}"
+        "if(secret){secret.autocomplete='current-password';}"
+        "return {endpoint,access,secret,save};"
+        "}"
+        "function hydrate(){"
+        "const inputs=credentialInputs();"
+        "if(!inputs.endpoint||!inputs.access||!inputs.secret){return;}"
+        "let saved=null;"
+        "try{saved=JSON.parse(localStorage.getItem(storageKey)||'null');}catch(_e){saved=null;}"
+        "if(!saved){return;}"
+        "if(!inputs.endpoint.value){setInput(inputs.endpoint,saved.endpoint);}"
+        "if(!inputs.access.value){setInput(inputs.access,saved.access);}"
+        "if(!inputs.secret.value){setInput(inputs.secret,saved.secret);}"
+        "setChecked(inputs.save,true);"
+        "}"
+        "function persist(){"
+        "const inputs=credentialInputs();"
+        "if(!inputs.save){return;}"
+        "if(!inputs.save.checked){localStorage.removeItem(storageKey); return;}"
+        "localStorage.setItem(storageKey,JSON.stringify({"
+        "endpoint:inputs.endpoint&&inputs.endpoint.value||'',"
+        "access:inputs.access&&inputs.access.value||'',"
+        "secret:inputs.secret&&inputs.secret.value||''"
+        "}));"
+        "}"
+        "if(!window.__sparcdCredentialsHelperInstalled){"
+        "window.__sparcdCredentialsHelperInstalled=true;"
+        "window.__sparcdCredentialsHydrate=hydrate;"
+        "document.addEventListener('click',(event)=>{"
+        "const button=event.target.closest('button');"
+        "if(button&&button.textContent.trim()==='Sign in'){setTimeout(persist,0);}"
+        "});"
+        "document.addEventListener('change',(event)=>{"
+        "const save=inputFor('Save username and password');"
+        "if(save&&event.target===save&&!save.checked){localStorage.removeItem(storageKey);}"
+        "});"
+        "new MutationObserver(hydrate).observe(document.body,{childList:true,subtree:true});"
+        "}"
+        "hydrate();"
+        "})();"
+        "</script>"
     )
-    return creds_form, project_header
+    return credentials_assets, creds_form, project_header
 
 
 @app.cell(hide_code=True)
@@ -139,20 +239,23 @@ def _(
     DEFAULT_ENDPOINT,
     DEFAULT_SECRET,
     change_credentials,
+    credentials_assets,
     creds_form,
     mo,
     project_header,
-    secret_visibility,
+    show_credentials,
+    show_password,
 ):
     _has_credentials = bool(DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET) or creds_form.value is not None
-    if _has_credentials and not change_credentials.value:
+    if _has_credentials and not show_credentials():
         _credential_panel = change_credentials
     else:
-        _items = [secret_visibility, creds_form]
+        _items = [show_password, creds_form]
         if _has_credentials:
             _items.insert(0, change_credentials)
         _credential_panel = mo.vstack(_items)
     mo.vstack([
+        credentials_assets,
         project_header,
         _credential_panel,
     ])
@@ -184,6 +287,7 @@ def _(
         _creds = _form_value
 
     _ready = bool(_creds and _creds.get("endpoint") and _creds.get("access") and _creds.get("secret"))
+    is_wildcats_s3_endpoint = False
     if not _ready:
         client = None
     else:
@@ -193,11 +297,13 @@ def _(
             _ep = _u.netloc
         else:
             _ep = _raw
+        _host = (urlparse(f"//{_ep}").hostname or "").lower().rstrip(".")
+        is_wildcats_s3_endpoint = _host == "wildcats.sparcd.arizona.edu"
         _secure = bool(_creds["secure"])
 
         client = Minio(_ep, access_key=_creds["access"], secret_key=_creds["secret"], secure=_secure)
     None
-    return (client,)
+    return client, is_wildcats_s3_endpoint
 
 
 @app.cell(hide_code=True)
@@ -478,7 +584,16 @@ def _(mo, observations, pl):
 
 
 @app.cell(hide_code=True)
-def _(collection_load_form, deployments, end_date_filter, mo, observations, pl, start_date_filter):
+def _(
+    collection_load_form,
+    deployments,
+    end_date_filter,
+    is_wildcats_s3_endpoint,
+    mo,
+    observations,
+    pl,
+    start_date_filter,
+):
     # Query filters. Options are built in Python for Pyodide/WASM compatibility.
     import re as _re
 
@@ -602,15 +717,23 @@ def _(collection_load_form, deployments, end_date_filter, mo, observations, pl, 
         label="Elevation display",
         full_width=False,
     )
-    map_display_mode = mo.ui.dropdown(
-        options={
-            "Hex cells": "hex",
-            "Exact sites": "points",
-        },
-        value="Hex cells",
-        label="Map display",
-        full_width=False,
-    )
+    if is_wildcats_s3_endpoint:
+        map_display_mode = mo.ui.dropdown(
+            options={
+                "Hex cells": "hex",
+                "Exact sites": "points",
+            },
+            value="Hex cells",
+            label="Map display",
+            full_width=False,
+        )
+        _map_controls = mo.hstack([elevation_unit, map_display_mode], widths="equal")
+    else:
+        from types import SimpleNamespace as _SimpleNamespace
+
+        map_display_mode = _SimpleNamespace(value="hex")
+        _map_controls = elevation_unit
+
     mo.vstack([
         mo.md("**Query filters**"),
         mo.hstack([collection_load_form, mountain_range_filter, site_code_filter], widths="equal"),
@@ -618,7 +741,7 @@ def _(collection_load_form, deployments, end_date_filter, mo, observations, pl, 
         mo.hstack([month_filter, include_common, elevation_range_filter], widths="equal"),
         mo.hstack([exclude_common, show_species_columns], widths=[2, 1]),
         mo.hstack([coordinate_format, coordinate_method, coordinate_digits], widths="equal"),
-        mo.hstack([elevation_unit, map_display_mode], widths="equal"),
+        _map_controls,
     ])
     return (
         coordinate_digits,
@@ -985,13 +1108,14 @@ def _(locations, mo, observations_filtered, pl):
 
 
 @app.cell(hide_code=True)
-def _(camera_map, hex_summary, map_display_mode, pl):
+def _(camera_map, hex_summary, is_wildcats_s3_endpoint, map_display_mode, pl):
     # Selection bridge for either hex cells or exact site points.
     _v = camera_map.value if hasattr(camera_map, "value") else []
+    _display_mode = map_display_mode.value if is_wildcats_s3_endpoint else "hex"
 
     selected_location_ids = []
     if _v:
-        if map_display_mode.value == "points":
+        if _display_mode == "points":
             _seen = set()
             for _p in _v:
                 _cd = _p.get("customdata")
@@ -1042,9 +1166,10 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(hex_geojson, hex_summary, locations, map_display_mode, mo):
+def _(hex_geojson, hex_summary, is_wildcats_s3_endpoint, locations, map_display_mode, mo):
     # Map. Choose hex cells for protected display or exact site points for precise QA.
     import plotly.graph_objects as go
+    _display_mode = map_display_mode.value if is_wildcats_s3_endpoint else "hex"
 
     if hex_summary.height == 0:
         camera_map = mo.md("_No locations to display._")
@@ -1122,7 +1247,7 @@ def _(hex_geojson, hex_summary, locations, map_display_mode, mo):
         }
         _map_style, _map_layers = _basemaps["Topo"]
 
-        if map_display_mode.value == "points":
+        if _display_mode == "points":
             _hex_lookup = {}
             for _r in hex_summary.iter_rows(named=True):
                 for _lid in _r["location_ids"]:
