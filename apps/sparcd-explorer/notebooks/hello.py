@@ -99,7 +99,7 @@ def _(
         full_width=True,
     )
     _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS")
-    _save_in = mo.ui.checkbox(value=False, label="Save username and password")
+    _save_in = mo.ui.checkbox(value=False, label="Save endpoint, username, and password")
 
     creds_form = (
         mo.md("""
@@ -184,7 +184,7 @@ def _(
         "const endpoint=inputFor('Endpoint');"
         "const access=inputFor('Username / access key');"
         "const secret=inputFor('Password');"
-        "const save=inputFor('Save username and password');"
+        "const save=inputFor('Save endpoint, username, and password');"
         "const form=endpoint&&endpoint.closest('form');"
         "if(form){form.classList.add('sparcd-credentials-form');}"
         "if(endpoint){endpoint.autocomplete='url';}"
@@ -221,7 +221,7 @@ def _(
         "if(button&&button.textContent.trim()==='Sign in'){setTimeout(persist,0);}"
         "});"
         "document.addEventListener('change',(event)=>{"
-        "const save=inputFor('Save username and password');"
+        "const save=inputFor('Save endpoint, username, and password');"
         "if(save&&event.target===save&&!save.checked){localStorage.removeItem(storageKey);}"
         "});"
         "new MutationObserver(hydrate).observe(document.body,{childList:true,subtree:true});"
