@@ -7,7 +7,9 @@
     "edit": "uv run marimo edit notebooks/hello.py --watch --no-token",
     "preview": "uv run marimo edit notebooks/sparcd_preview.py --watch --no-token",
     "start": "uv run marimo run notebooks/hello.py --no-token",
-    "build": "uv run marimo export html-wasm notebooks/hello.py -o dist --mode run --force",
+    "start:host": "uv run marimo run notebooks/hello.py --host 0.0.0.0 --port 8080 --no-token --headless",
+    "build": "node scripts/build-pages.mjs",
+    "export:wasm": "uv run marimo export html-wasm notebooks/hello.py -o dist --mode run --force",
     "check": "uv run python -m compileall -q notebooks",
     "lint": "uv run python -m compileall -q notebooks",
     "install:py": "uv sync"

@@ -20,7 +20,7 @@ From the repo root:
 ```sh
 pnpm dev --filter @sparcd/sparcd-explorer    # marimo edit --watch
 pnpm start --filter @sparcd/sparcd-explorer  # marimo run (read-only app mode)
-pnpm build --filter @sparcd/sparcd-explorer  # export static WASM app to dist/
+pnpm build --filter @sparcd/sparcd-explorer  # build GitHub Pages handoff to dist/
 ```
 
 Or from this directory:
@@ -30,12 +30,22 @@ pnpm dev      # marimo edit notebooks/hello.py --watch
 pnpm start    # marimo run notebooks/hello.py
 ```
 
-## Static deployment
+## Deployment
 
-GitHub Pages deploys the WASM export from `notebooks/hello.py`. The notebook
-keeps its browser dependencies in the PEP 723 header at the top of the file,
-so local `pnpm build` and the Pages workflow export the same source notebook.
-Serve `dist/` over HTTP to preview the static bundle.
+The interactive explorer should run as a live marimo app:
+
+```sh
+uv run marimo run notebooks/hello.py --host 0.0.0.0 --port 8080 --no-token --headless
+```
+
+`Dockerfile` packages that command for a container host. Deploy it only behind
+trusted HTTPS; credentials entered in the app are sent to the marimo server for
+S3 reads.
+
+GitHub Pages serves `pages/index.html` as a handoff page. The previous
+`html-wasm` export path is kept as `pnpm export:wasm`, but it is not the
+deployment target because the current marimo WASM export does not render this
+tool's interactive controls.
 
 ## Agent workflow
 

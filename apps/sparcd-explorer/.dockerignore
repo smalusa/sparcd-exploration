@@ -1,0 +1,12 @@
+.env
+.env.*
+.marimo-*.log
+.turbo
+.uv-cache
+.venv
+__marimo__
+__pycache__
+dist
+*.err.log
+*.out.log
+*.pyc

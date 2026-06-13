@@ -6,9 +6,7 @@ tuned end-to-end for a single feature.
 
 The first such tool is `apps/sparcd-explorer` — a [marimo](https://marimo.io)
 notebook that connects to the SPARC'd MinIO backend, bins camera locations
-into H3 hexagons, and serves an interactive species-richness report. It also
-exports to a static Pyodide bundle that runs entirely in the browser
-(see [Static deploy](#static-deploy)).
+into H3 hexagons, and serves an interactive species-richness report.
 
 ## Approach
 
@@ -61,18 +59,16 @@ pnpm dev
 4. Tasks defined in [`turbo.json`](./turbo.json) (`dev`, `build`, `lint`,
    `start`, `check`, `test`) will run across whichever apps implement them.
 
-## Static deploy
+## Deployment
 
-`.github/workflows/pages.yml` builds the marimo notebook into a static
-Pyodide bundle and publishes it via GitHub Pages on every push that touches
-`apps/sparcd-explorer/**`. Live at:
+`.github/workflows/pages.yml` publishes a GitHub Pages handoff page at:
 
 <https://smalusa.github.io/sparcd-exploration/>
 
-The deployed page runs Python entirely in the visitor's browser. SPARC'd
-credentials are entered in the form — there is no server-side secret. The
-MinIO endpoint must permit CORS from the Pages origin for data fetches to
-succeed.
+The interactive explorer runs as a live marimo app, not a GitHub Pages WASM
+bundle. The tested `html-wasm` export path did not render this tool's
+interactive controls, so the app should be deployed with
+`apps/sparcd-explorer/Dockerfile` on a trusted HTTPS host.
 
 ## Background notes
 
