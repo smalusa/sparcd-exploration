@@ -1034,75 +1034,104 @@ def _(locations, mo, observations_filtered, pl):
 
     HEX_RESOLUTION = 6
 
-    _loc_with_hex = locations.with_columns(
-        pl.struct(["latitude", "longitude"])
-        .map_elements(
-            lambda s: _h3.latlng_to_cell(s["latitude"], s["longitude"], HEX_RESOLUTION),
-            return_dtype=pl.Utf8,
-        )
-        .alias("h3_id")
-    )
-
-    _dep_to_hex = {}
-    for _row in _loc_with_hex.iter_rows(named=True):
-        for _d in _row["deployment_ids"]:
-            _dep_to_hex[_d] = _row["h3_id"]
-
-    _obs_with_hex = observations_filtered.with_columns(
-        pl.col("deployment_id").replace_strict(_dep_to_hex, default=None).alias("h3_id")
-    ).filter(pl.col("h3_id").is_not_null())
-
-    _obs_agg = (
-        _obs_with_hex
-        .group_by("h3_id")
-        .agg(
-            pl.col("scientific_name").filter(pl.col("scientific_name").str.len_chars() >= 3).n_unique().alias("species_richness"),
-            pl.col("media_path").n_unique().alias("checklists"),
-            pl.col("timestamp").max().alias("most_recent"),
-        )
-    )
-    _cam_agg = (
-        _loc_with_hex
-        .group_by("h3_id")
-        .agg(
-            pl.col("location_id").n_unique().alias("camera_count"),
-            pl.col("location_id").alias("location_ids"),
-            pl.col("location_name").alias("location_names"),
-            pl.col("latitude").mean().alias("center_lat"),
-            pl.col("longitude").mean().alias("center_lng"),
-        )
-    )
-
-    hex_summary = (
-        _cam_agg
-        .join(_obs_agg, on="h3_id", how="left")
-        .with_columns(
-            pl.col("species_richness").fill_null(0),
-            pl.col("checklists").fill_null(0),
-            (pl.col("species_richness") / pl.col("camera_count")).fill_nan(0.0).fill_null(0.0).alias("richness_per_camera"),
-            pl.col("most_recent").fill_null("\u2014"),
-        )
-        .sort("species_richness", descending=True)
-    )
-
-    def _to_polygon(hid):
-        boundary = _h3.cell_to_boundary(hid)
-        ring = [[lng, lat] for lat, lng in boundary]
-        ring.append(ring[0])
-        return ring
-
-    hex_geojson = {
-        "type": "FeatureCollection",
-        "features": [
+    if locations.height == 0:
+        hex_geojson = {"type": "FeatureCollection", "features": []}
+        hex_summary = pl.DataFrame(
             {
-                "type": "Feature",
-                "id": _hid,
-                "properties": {"h3_id": _hid},
-                "geometry": {"type": "Polygon", "coordinates": [_to_polygon(_hid)]},
-            }
-            for _hid in hex_summary["h3_id"].to_list()
-        ],
-    }
+                "h3_id": [],
+                "camera_count": [],
+                "location_ids": [],
+                "location_names": [],
+                "center_lat": [],
+                "center_lng": [],
+                "species_richness": [],
+                "checklists": [],
+                "most_recent": [],
+                "richness_per_camera": [],
+            },
+            schema={
+                "h3_id": pl.Utf8,
+                "camera_count": pl.Int64,
+                "location_ids": pl.List(pl.Utf8),
+                "location_names": pl.List(pl.Utf8),
+                "center_lat": pl.Float64,
+                "center_lng": pl.Float64,
+                "species_richness": pl.Int64,
+                "checklists": pl.Int64,
+                "most_recent": pl.Utf8,
+                "richness_per_camera": pl.Float64,
+            },
+        )
+    else:
+        _loc_with_hex = locations.with_columns(
+            pl.struct(["latitude", "longitude"])
+            .map_elements(
+                lambda s: _h3.latlng_to_cell(s["latitude"], s["longitude"], HEX_RESOLUTION),
+                return_dtype=pl.Utf8,
+            )
+            .alias("h3_id")
+        )
+
+        _dep_to_hex = {}
+        for _row in _loc_with_hex.iter_rows(named=True):
+            for _d in _row["deployment_ids"]:
+                _dep_to_hex[_d] = _row["h3_id"]
+
+        _obs_with_hex = observations_filtered.with_columns(
+            pl.col("deployment_id").replace_strict(_dep_to_hex, default=None).alias("h3_id")
+        ).filter(pl.col("h3_id").is_not_null())
+
+        _obs_agg = (
+            _obs_with_hex
+            .group_by("h3_id")
+            .agg(
+                pl.col("scientific_name").filter(pl.col("scientific_name").str.len_chars() >= 3).n_unique().alias("species_richness"),
+                pl.col("media_path").n_unique().alias("checklists"),
+                pl.col("timestamp").max().alias("most_recent"),
+            )
+        )
+        _cam_agg = (
+            _loc_with_hex
+            .group_by("h3_id")
+            .agg(
+                pl.col("location_id").n_unique().alias("camera_count"),
+                pl.col("location_id").alias("location_ids"),
+                pl.col("location_name").alias("location_names"),
+                pl.col("latitude").mean().alias("center_lat"),
+                pl.col("longitude").mean().alias("center_lng"),
+            )
+        )
+
+        hex_summary = (
+            _cam_agg
+            .join(_obs_agg, on="h3_id", how="left")
+            .with_columns(
+                pl.col("species_richness").fill_null(0),
+                pl.col("checklists").fill_null(0),
+                (pl.col("species_richness") / pl.col("camera_count")).fill_nan(0.0).fill_null(0.0).alias("richness_per_camera"),
+                pl.col("most_recent").fill_null("\u2014"),
+            )
+            .sort("species_richness", descending=True)
+        )
+
+        def _to_polygon(hid):
+            boundary = _h3.cell_to_boundary(hid)
+            ring = [[lng, lat] for lat, lng in boundary]
+            ring.append(ring[0])
+            return ring
+
+        hex_geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": _hid,
+                    "properties": {"h3_id": _hid},
+                    "geometry": {"type": "Polygon", "coordinates": [_to_polygon(_hid)]},
+                }
+                for _hid in hex_summary["h3_id"].to_list()
+            ],
+        }
     None
     return hex_geojson, hex_summary
 
