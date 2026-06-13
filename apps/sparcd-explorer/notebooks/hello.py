@@ -32,13 +32,11 @@ def _():
 
     DEFAULT_ENDPOINT = os.getenv("SPARCD_S3_ENDPOINT", "")
     DEFAULT_ACCESS = os.getenv("SPARCD_S3_ACCESS_KEY", "")
-    DEFAULT_SECRET = os.getenv("SPARCD_S3_SECRET_KEY", "")
     DEFAULT_SECURE = os.getenv("SPARCD_S3_SECURE", "true").lower() == "true"
     SPARCD_COLLECTION_DATA_CACHE = {}
     return (
         DEFAULT_ACCESS,
         DEFAULT_ENDPOINT,
-        DEFAULT_SECRET,
         DEFAULT_SECURE,
         Minio,
         SPARCD_COLLECTION_DATA_CACHE,
@@ -49,7 +47,7 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    show_credentials, set_show_credentials = mo.state(False)
+    show_credentials, set_show_credentials = mo.state(True)
 
     def _set_show_credentials(value):
         set_show_credentials(bool(value))
@@ -72,13 +70,12 @@ def _(mo):
 def _(
     DEFAULT_ACCESS,
     DEFAULT_ENDPOINT,
-    DEFAULT_SECRET,
     DEFAULT_SECURE,
     collapse_credentials,
     mo,
     show_password,
 ):
-    # S3 / MinIO credentials. Edit and click Submit. Values prefill from .env if present.
+    # S3 / MinIO credentials. Users must submit a password each session.
     from pathlib import Path as _Path
 
     _endpoint_in = mo.ui.text(
@@ -93,13 +90,13 @@ def _(
         full_width=True,
     )
     _secret_in = mo.ui.text(
-        value=DEFAULT_SECRET,
+        value="",
         label="Password",
         kind="text" if show_password.value else "password",
         full_width=True,
     )
     _secure_in = mo.ui.checkbox(value=DEFAULT_SECURE, label="Use HTTPS")
-    _save_in = mo.ui.checkbox(value=False, label="Save endpoint, username, and password")
+    _save_in = mo.ui.checkbox(value=False, label="Remember endpoint and username on this browser")
 
     creds_form = (
         mo.md("""
@@ -157,7 +154,9 @@ def _(
         "</style>"
         "<script>"
         "(function(){"
-        "const storageKey='sparcd-explorer.credentials.v1';"
+        "const storageKey='sparcd-explorer.credentials.v2';"
+        "const legacyStorageKey='sparcd-explorer.credentials.v1';"
+        "try{localStorage.removeItem(legacyStorageKey);}catch(_e){}"
         "function inputFor(labelText){"
         "const labels=[...document.querySelectorAll('label')];"
         "const label=labels.find((item)=>item.textContent.trim()===labelText);"
@@ -184,7 +183,7 @@ def _(
         "const endpoint=inputFor('Endpoint');"
         "const access=inputFor('Username / access key');"
         "const secret=inputFor('Password');"
-        "const save=inputFor('Save endpoint, username, and password');"
+        "const save=inputFor('Remember endpoint and username on this browser');"
         "const form=endpoint&&endpoint.closest('form');"
         "if(form){form.classList.add('sparcd-credentials-form');}"
         "if(endpoint){endpoint.autocomplete='url';}"
@@ -200,7 +199,6 @@ def _(
         "if(!saved){return;}"
         "if(!inputs.endpoint.value){setInput(inputs.endpoint,saved.endpoint);}"
         "if(!inputs.access.value){setInput(inputs.access,saved.access);}"
-        "if(!inputs.secret.value){setInput(inputs.secret,saved.secret);}"
         "setChecked(inputs.save,true);"
         "}"
         "function persist(){"
@@ -209,8 +207,7 @@ def _(
         "if(!inputs.save.checked){localStorage.removeItem(storageKey); return;}"
         "localStorage.setItem(storageKey,JSON.stringify({"
         "endpoint:inputs.endpoint&&inputs.endpoint.value||'',"
-        "access:inputs.access&&inputs.access.value||'',"
-        "secret:inputs.secret&&inputs.secret.value||''"
+        "access:inputs.access&&inputs.access.value||''"
         "}));"
         "}"
         "if(!window.__sparcdCredentialsHelperInstalled){"
@@ -221,7 +218,7 @@ def _(
         "if(button&&button.textContent.trim()==='Sign in'){setTimeout(persist,0);}"
         "});"
         "document.addEventListener('change',(event)=>{"
-        "const save=inputFor('Save endpoint, username, and password');"
+        "const save=inputFor('Remember endpoint and username on this browser');"
         "if(save&&event.target===save&&!save.checked){localStorage.removeItem(storageKey);}"
         "});"
         "new MutationObserver(hydrate).observe(document.body,{childList:true,subtree:true});"
@@ -235,9 +232,6 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    DEFAULT_ACCESS,
-    DEFAULT_ENDPOINT,
-    DEFAULT_SECRET,
     change_credentials,
     credentials_assets,
     creds_form,
@@ -246,7 +240,7 @@ def _(
     show_credentials,
     show_password,
 ):
-    _has_credentials = bool(DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET) or creds_form.value is not None
+    _has_credentials = creds_form.value is not None
     if _has_credentials and not show_credentials():
         _credential_panel = change_credentials
     else:
@@ -264,25 +258,15 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    DEFAULT_ACCESS,
-    DEFAULT_ENDPOINT,
-    DEFAULT_SECRET,
-    DEFAULT_SECURE,
     Minio,
     creds_form,
     mo,
     urlparse,
 ):
-    # Build the MinIO client from the submitted credentials, falling back to .env
-    # defaults on first load (so a working .env keeps the app usable without re-submitting).
+    # Build the MinIO client only after the user submits credentials.
     _form_value = creds_form.value
     if _form_value is None:
-        _creds = {
-            "endpoint": DEFAULT_ENDPOINT,
-            "access": DEFAULT_ACCESS,
-            "secret": DEFAULT_SECRET,
-            "secure": DEFAULT_SECURE,
-        } if (DEFAULT_ENDPOINT and DEFAULT_ACCESS and DEFAULT_SECRET) else None
+        _creds = None
     else:
         _creds = _form_value
 
